@@ -2,6 +2,10 @@ import { useState, useEffect, useCallback, Suspense } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { GlobalSearch } from "@/components/GlobalSearch";
+import { WelcomeWizard } from "@/features/auth/WelcomeWizard";
+import { QuickCreateDialog } from "@/components/QuickCreateDialog";
+import { KeyboardShortcutsDialog } from "@/components/KeyboardShortcutsDialog";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 
 const pathMap: Record<string, string> = {
   "": "Home",
@@ -36,6 +40,23 @@ export function AppLayout() {
   const isMobile = useIsMobile();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(isMobile);
+
+  // Welcome wizard state
+  const [showWizard, setShowWizard] = useState(
+    () => !localStorage.getItem("crm_onboarded")
+  );
+
+  // Quick Create dialog
+  const [showQuickCreate, setShowQuickCreate] = useState(false);
+
+  // Keyboard shortcuts help dialog
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+
+  // Register keyboard shortcuts
+  useKeyboardShortcuts({
+    onQuickCreate: useCallback(() => setShowQuickCreate(true), []),
+    onShowHelp: useCallback(() => setShowShortcutsHelp(true), []),
+  });
 
   const section = location.pathname.split("/")[1] || "";
   const sectionName = pathMap[section] ?? section;
@@ -85,6 +106,24 @@ export function AppLayout() {
           </Suspense>
         </div>
       </main>
+
+      {/* Welcome Wizard overlay */}
+      <WelcomeWizard
+        open={showWizard}
+        onComplete={() => setShowWizard(false)}
+      />
+
+      {/* Quick Create dialog */}
+      <QuickCreateDialog
+        open={showQuickCreate}
+        onOpenChange={setShowQuickCreate}
+      />
+
+      {/* Keyboard shortcuts help dialog */}
+      <KeyboardShortcutsDialog
+        open={showShortcutsHelp}
+        onOpenChange={setShowShortcutsHelp}
+      />
     </div>
   );
 }

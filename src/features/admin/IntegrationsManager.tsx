@@ -15,6 +15,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { integrations, type Integration } from "./integrations-config";
 import { WebhooksManager } from "./WebhooksManager";
+import { EmailIntegrationSettings } from "./EmailIntegrationSettings";
 
 interface IntegrationsManagerProps {
   onNavigateTab?: (tab: string) => void;
@@ -124,6 +125,10 @@ export function IntegrationsManager({
           Connect your CRM with external tools and services.
         </p>
       </div>
+
+      <EmailIntegrationSettings />
+
+      <Separator />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {integrations.map((integration) => (

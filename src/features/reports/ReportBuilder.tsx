@@ -13,7 +13,22 @@ import {
   ChevronDown,
   Columns3,
   Download,
+  Table2,
+  BarChart3,
+  PieChartIcon,
 } from "lucide-react";
+import {
+  BarChart,
+  Bar,
+  PieChart,
+  Pie,
+  Cell,
+  XAxis,
+  YAxis,
+  Tooltip as RechartsTooltip,
+  Legend as RechartsLegend,
+  ResponsiveContainer,
+} from "recharts";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/PageHeader";
 import { ReportsDashboard } from "./ReportsDashboard";
@@ -766,6 +781,55 @@ function SortSelector({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Chart helpers
+// ---------------------------------------------------------------------------
+
+const CHART_COLORS = [
+  "hsl(var(--chart-1))",
+  "hsl(var(--chart-2))",
+  "hsl(var(--chart-3))",
+  "hsl(var(--chart-4))",
+  "hsl(var(--chart-5))",
+];
+
+type ViewMode = "table" | "bar" | "pie";
+
+/** Returns true if a column type holds numeric data suitable for charting. */
+function isNumericColType(type: ColumnDef["type"]): boolean {
+  return type === "number" || type === "currency";
+}
+
+/** Returns true if a column type holds categorical / label data. */
+function isLabelColType(type: ColumnDef["type"]): boolean {
+  return type === "text" || type === "enum";
+}
+
+/** Auto-detect the best label column (first text/enum). */
+function detectLabelColumn(cols: ColumnDef[]): ColumnDef | undefined {
+  return cols.find((c) => isLabelColType(c.type));
+}
+
+/** Auto-detect the best value column (first numeric/currency). */
+function detectValueColumn(cols: ColumnDef[]): ColumnDef | undefined {
+  return cols.find((c) => isNumericColType(c.type));
+}
+
+/** Extract a raw number from a data row for charting. */
+function extractNumber(row: Record<string, unknown>, key: string): number {
+  const val = row[key];
+  if (typeof val === "number") return val;
+  if (typeof val === "string") {
+    const n = Number(val.replace(/[,$]/g, ""));
+    return isNaN(n) ? 0 : n;
+  }
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Results display — table + charts
+// ---------------------------------------------------------------------------
+
 function ResultsTable({
   entityKey,
   columns,
@@ -783,6 +847,30 @@ function ResultsTable({
   const visibleCols = columns
     .map((key) => entity.columns.find((c) => c.key === key))
     .filter((c): c is ColumnDef => !!c);
+
+  const numericCols = visibleCols.filter((c) => isNumericColType(c.type));
+  const labelCols = visibleCols.filter((c) => isLabelColType(c.type));
+  const hasChartableData = numericCols.length > 0 && data.length > 0;
+
+  const [viewMode, setViewMode] = useState<ViewMode>("table");
+
+  // Axis selection state for bar chart
+  const [barXKey, setBarXKey] = useState<string>(() => detectLabelColumn(visibleCols)?.key ?? "");
+  const [barYKey, setBarYKey] = useState<string>(() => detectValueColumn(visibleCols)?.key ?? "");
+
+  // Axis selection state for pie chart
+  const [pieLabelKey, setPieLabelKey] = useState<string>(() => detectLabelColumn(visibleCols)?.key ?? "");
+  const [pieValueKey, setPieValueKey] = useState<string>(() => detectValueColumn(visibleCols)?.key ?? "");
+
+  // Re-detect defaults when columns change
+  useMemo(() => {
+    const defLabel = detectLabelColumn(visibleCols)?.key ?? "";
+    const defValue = detectValueColumn(visibleCols)?.key ?? "";
+    setBarXKey(defLabel);
+    setBarYKey(defValue);
+    setPieLabelKey(defLabel);
+    setPieValueKey(defValue);
+  }, [entityKey, columns.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (isLoading) {
     return (
@@ -802,49 +890,220 @@ function ResultsTable({
     );
   }
 
-  return (
-    <div className="mt-6 space-y-2">
-      <p className="text-sm text-muted-foreground">
-        {count.toLocaleString()} result{count !== 1 ? "s" : ""}
-        {count > 1000 ? " (showing first 1,000)" : ""}
-      </p>
-      <div className="border rounded-md overflow-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              {visibleCols.map((col) => (
-                <TableHead key={col.key} className="whitespace-nowrap">
-                  {col.label}
-                </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {data.map((row, rowIdx) => (
-              <TableRow key={rowIdx}>
-                {visibleCols.map((col) => {
-                  const rawValue = row[col.key];
-                  const formatted = formatCellValue(rawValue, col);
+  // Build chart data
+  const chartData = data.map((row) => {
+    const entry: Record<string, unknown> = {};
+    for (const col of visibleCols) {
+      if (isNumericColType(col.type)) {
+        entry[col.key] = extractNumber(row, col.key);
+      } else {
+        entry[col.key] = formatCellValue(row[col.key], col);
+      }
+    }
+    return entry;
+  });
 
-                  return (
-                    <TableCell key={col.key} className="whitespace-nowrap">
-                      {col.type === "enum" ? (
-                        <Badge variant="secondary">{formatted}</Badge>
-                      ) : col.type === "boolean" ? (
-                        <Badge variant={rawValue ? "default" : "outline"}>
-                          {formatted}
-                        </Badge>
-                      ) : (
-                        formatted
-                      )}
-                    </TableCell>
-                  );
-                })}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+  return (
+    <div className="mt-6 space-y-3">
+      {/* Header with result count and view mode toggle */}
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          {count.toLocaleString()} result{count !== 1 ? "s" : ""}
+          {count > 1000 ? " (showing first 1,000)" : ""}
+        </p>
+
+        {hasChartableData && (
+          <div className="flex items-center gap-1 border rounded-md p-0.5">
+            <Button
+              variant={viewMode === "table" ? "default" : "ghost"}
+              size="sm"
+              className="h-7 px-2.5 gap-1.5"
+              onClick={() => setViewMode("table")}
+            >
+              <Table2 className="h-3.5 w-3.5" />
+              Table
+            </Button>
+            <Button
+              variant={viewMode === "bar" ? "default" : "ghost"}
+              size="sm"
+              className="h-7 px-2.5 gap-1.5"
+              onClick={() => setViewMode("bar")}
+            >
+              <BarChart3 className="h-3.5 w-3.5" />
+              Bar Chart
+            </Button>
+            <Button
+              variant={viewMode === "pie" ? "default" : "ghost"}
+              size="sm"
+              className="h-7 px-2.5 gap-1.5"
+              onClick={() => setViewMode("pie")}
+            >
+              <PieChartIcon className="h-3.5 w-3.5" />
+              Pie Chart
+            </Button>
+          </div>
+        )}
       </div>
+
+      {/* Table view */}
+      {viewMode === "table" && (
+        <div className="border rounded-md overflow-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                {visibleCols.map((col) => (
+                  <TableHead key={col.key} className="whitespace-nowrap">
+                    {col.label}
+                  </TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.map((row, rowIdx) => (
+                <TableRow key={rowIdx}>
+                  {visibleCols.map((col) => {
+                    const rawValue = row[col.key];
+                    const formatted = formatCellValue(rawValue, col);
+
+                    return (
+                      <TableCell key={col.key} className="whitespace-nowrap">
+                        {col.type === "enum" ? (
+                          <Badge variant="secondary">{formatted}</Badge>
+                        ) : col.type === "boolean" ? (
+                          <Badge variant={rawValue ? "default" : "outline"}>
+                            {formatted}
+                          </Badge>
+                        ) : (
+                          formatted
+                        )}
+                      </TableCell>
+                    );
+                  })}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      {/* Bar Chart view */}
+      {viewMode === "bar" && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-4">
+            <div className="space-y-1">
+              <Label className="text-xs">X-Axis (Category)</Label>
+              <Select value={barXKey} onValueChange={setBarXKey}>
+                <SelectTrigger className="w-44 h-8 text-xs">
+                  <SelectValue placeholder="Select column" />
+                </SelectTrigger>
+                <SelectContent>
+                  {labelCols.map((col) => (
+                    <SelectItem key={col.key} value={col.key}>
+                      {col.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Y-Axis (Value)</Label>
+              <Select value={barYKey} onValueChange={setBarYKey}>
+                <SelectTrigger className="w-44 h-8 text-xs">
+                  <SelectValue placeholder="Select column" />
+                </SelectTrigger>
+                <SelectContent>
+                  {numericCols.map((col) => (
+                    <SelectItem key={col.key} value={col.key}>
+                      {col.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="border rounded-md p-4">
+            <ResponsiveContainer width="100%" height={400}>
+              <BarChart data={chartData}>
+                <XAxis
+                  dataKey={barXKey}
+                  tick={{ fontSize: 12 }}
+                  interval={0}
+                  angle={-30}
+                  textAnchor="end"
+                  height={80}
+                />
+                <YAxis tick={{ fontSize: 12 }} />
+                <RechartsTooltip />
+                <RechartsLegend />
+                <Bar dataKey={barYKey} name={visibleCols.find((c) => c.key === barYKey)?.label ?? barYKey}>
+                  {chartData.map((_, index) => (
+                    <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* Pie Chart view */}
+      {viewMode === "pie" && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-4">
+            <div className="space-y-1">
+              <Label className="text-xs">Label</Label>
+              <Select value={pieLabelKey} onValueChange={setPieLabelKey}>
+                <SelectTrigger className="w-44 h-8 text-xs">
+                  <SelectValue placeholder="Select column" />
+                </SelectTrigger>
+                <SelectContent>
+                  {labelCols.map((col) => (
+                    <SelectItem key={col.key} value={col.key}>
+                      {col.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Value</Label>
+              <Select value={pieValueKey} onValueChange={setPieValueKey}>
+                <SelectTrigger className="w-44 h-8 text-xs">
+                  <SelectValue placeholder="Select column" />
+                </SelectTrigger>
+                <SelectContent>
+                  {numericCols.map((col) => (
+                    <SelectItem key={col.key} value={col.key}>
+                      {col.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="border rounded-md p-4">
+            <ResponsiveContainer width="100%" height={400}>
+              <PieChart>
+                <Pie
+                  data={chartData}
+                  dataKey={pieValueKey}
+                  nameKey={pieLabelKey}
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={150}
+                  label
+                >
+                  {chartData.map((_, index) => (
+                    <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                  ))}
+                </Pie>
+                <RechartsTooltip />
+                <RechartsLegend />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

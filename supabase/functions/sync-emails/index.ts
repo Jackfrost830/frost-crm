@@ -1,0 +1,570 @@
+// sync-emails Edge Function
+//
+// Fetches new emails for all connected users (Gmail / Outlook) and creates
+// CRM activity records for messages that match a known contact email address.
+//
+// Deployment:
+//   supabase functions deploy sync-emails --no-verify-jwt
+//
+// Trigger: call via cron (pg_cron or external scheduler) every 5-15 minutes.
+//
+// Required environment variables (set via supabase secrets set):
+//   SUPABASE_URL              - project URL
+//   SUPABASE_SERVICE_ROLE_KEY - service-role key (bypasses RLS)
+//   GOOGLE_CLIENT_ID          - Google OAuth client ID
+//   GOOGLE_CLIENT_SECRET      - Google OAuth client secret
+//   MICROSOFT_CLIENT_ID       - Azure AD app client ID
+//   MICROSOFT_CLIENT_SECRET   - Azure AD app client secret
+
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface EmailSyncConnection {
+  id: string;
+  user_id: string;
+  provider: "gmail" | "outlook";
+  email_address: string | null;
+  access_token: string | null;
+  refresh_token: string | null;
+  token_expires_at: string | null;
+  last_sync_at: string | null;
+  is_active: boolean;
+  config: {
+    log_sent: boolean;
+    log_received: boolean;
+    primary_only: boolean;
+    auto_link_opps: boolean;
+  };
+}
+
+interface ParsedEmail {
+  messageId: string;
+  subject: string;
+  body: string;
+  from: string;
+  to: string[];
+  cc: string[];
+  date: string;
+  direction: "sent" | "received";
+}
+
+interface ContactMatch {
+  contact_id: string;
+  account_id: string;
+  is_primary: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Token refresh helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Refresh a Gmail OAuth access token using the stored refresh token.
+ */
+async function refreshGmailToken(
+  refreshToken: string
+): Promise<{ access_token: string; expires_in: number }> {
+  const clientId = Deno.env.get("GOOGLE_CLIENT_ID")!;
+  const clientSecret = Deno.env.get("GOOGLE_CLIENT_SECRET")!;
+
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Gmail token refresh failed: ${res.status} ${text}`);
+  }
+
+  return res.json();
+}
+
+/**
+ * Refresh an Outlook OAuth access token using the stored refresh token.
+ */
+async function refreshOutlookToken(
+  refreshToken: string
+): Promise<{ access_token: string; expires_in: number }> {
+  const clientId = Deno.env.get("MICROSOFT_CLIENT_ID")!;
+  const clientSecret = Deno.env.get("MICROSOFT_CLIENT_SECRET")!;
+
+  const res = await fetch(
+    "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+        scope: "https://graph.microsoft.com/Mail.Read offline_access",
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Outlook token refresh failed: ${res.status} ${text}`);
+  }
+
+  return res.json();
+}
+
+/**
+ * Ensure the access token is valid, refreshing if necessary.
+ * Returns a valid access token and updates the DB row.
+ */
+async function ensureValidToken(
+  supabase: SupabaseClient,
+  conn: EmailSyncConnection
+): Promise<string> {
+  // If the token has not yet expired, return it as-is
+  if (
+    conn.access_token &&
+    conn.token_expires_at &&
+    new Date(conn.token_expires_at) > new Date(Date.now() + 60_000)
+  ) {
+    return conn.access_token;
+  }
+
+  if (!conn.refresh_token) {
+    throw new Error(
+      `No refresh token available for connection ${conn.id} (${conn.provider})`
+    );
+  }
+
+  console.log(`Refreshing ${conn.provider} token for connection ${conn.id}`);
+
+  const refreshFn =
+    conn.provider === "gmail" ? refreshGmailToken : refreshOutlookToken;
+  const tokenData = await refreshFn(conn.refresh_token);
+
+  const expiresAt = new Date(
+    Date.now() + tokenData.expires_in * 1000
+  ).toISOString();
+
+  await supabase
+    .from("email_sync_connections")
+    .update({
+      access_token: tokenData.access_token,
+      token_expires_at: expiresAt,
+    })
+    .eq("id", conn.id);
+
+  return tokenData.access_token;
+}
+
+// ---------------------------------------------------------------------------
+// Email fetching
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch new emails from the Gmail API since `sinceDate`.
+ *
+ * Uses the Gmail Users.messages.list endpoint with an `after:` query,
+ * then fetches metadata for each message.
+ */
+async function fetchGmailEmails(
+  accessToken: string,
+  userEmail: string,
+  sinceDate: string
+): Promise<ParsedEmail[]> {
+  const sinceEpoch = Math.floor(new Date(sinceDate).getTime() / 1000);
+  const query = `after:${sinceEpoch}`;
+
+  // Step 1 -- list message IDs
+  const listRes = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=100`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+
+  if (!listRes.ok) {
+    const text = await listRes.text();
+    throw new Error(`Gmail list failed: ${listRes.status} ${text}`);
+  }
+
+  const listData = await listRes.json();
+  const messageIds: string[] = (listData.messages ?? []).map(
+    (m: { id: string }) => m.id
+  );
+
+  if (messageIds.length === 0) return [];
+
+  // Step 2 -- fetch each message's metadata (batching omitted for clarity)
+  const emails: ParsedEmail[] = [];
+  for (const msgId of messageIds) {
+    const msgRes = await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Date`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+
+    if (!msgRes.ok) continue;
+
+    const msg = await msgRes.json();
+    const headers: Record<string, string> = {};
+    for (const h of msg.payload?.headers ?? []) {
+      headers[h.name.toLowerCase()] = h.value;
+    }
+
+    const from = extractEmail(headers["from"] ?? "");
+    const to = (headers["to"] ?? "")
+      .split(",")
+      .map(extractEmail)
+      .filter(Boolean);
+    const cc = (headers["cc"] ?? "")
+      .split(",")
+      .map(extractEmail)
+      .filter(Boolean);
+
+    // Determine direction based on whether the connected account is the sender
+    const direction =
+      from.toLowerCase() === userEmail.toLowerCase() ? "sent" : "received";
+
+    emails.push({
+      messageId: msgId,
+      subject: headers["subject"] ?? "(no subject)",
+      body: msg.snippet ?? "",
+      from,
+      to,
+      cc,
+      date: headers["date"] ?? new Date().toISOString(),
+      direction,
+    });
+  }
+
+  return emails;
+}
+
+/**
+ * Fetch new emails from Microsoft Graph since `sinceDate`.
+ *
+ * Uses the /me/messages endpoint with a $filter on receivedDateTime.
+ */
+async function fetchOutlookEmails(
+  accessToken: string,
+  userEmail: string,
+  sinceDate: string
+): Promise<ParsedEmail[]> {
+  const isoSince = new Date(sinceDate).toISOString();
+  const filter = `receivedDateTime ge ${isoSince}`;
+
+  const res = await fetch(
+    `https://graph.microsoft.com/v1.0/me/messages?$filter=${encodeURIComponent(filter)}&$top=100&$select=id,subject,bodyPreview,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime&$orderby=receivedDateTime desc`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Outlook fetch failed: ${res.status} ${text}`);
+  }
+
+  const data = await res.json();
+  const emails: ParsedEmail[] = [];
+
+  for (const msg of data.value ?? []) {
+    const from =
+      msg.from?.emailAddress?.address ?? "";
+    const to = (msg.toRecipients ?? []).map(
+      (r: { emailAddress: { address: string } }) =>
+        r.emailAddress?.address ?? ""
+    );
+    const cc = (msg.ccRecipients ?? []).map(
+      (r: { emailAddress: { address: string } }) =>
+        r.emailAddress?.address ?? ""
+    );
+
+    const direction =
+      from.toLowerCase() === userEmail.toLowerCase() ? "sent" : "received";
+
+    emails.push({
+      messageId: msg.id,
+      subject: msg.subject ?? "(no subject)",
+      body: msg.bodyPreview ?? "",
+      from,
+      to,
+      cc,
+      date: msg.receivedDateTime ?? msg.sentDateTime ?? new Date().toISOString(),
+      direction,
+    });
+  }
+
+  return emails;
+}
+
+// ---------------------------------------------------------------------------
+// Contact matching
+// ---------------------------------------------------------------------------
+
+/**
+ * Look up CRM contacts by email address, returning account_id and primary flag.
+ */
+async function matchContactsByEmail(
+  supabase: SupabaseClient,
+  emailAddresses: string[]
+): Promise<Map<string, ContactMatch>> {
+  if (emailAddresses.length === 0) return new Map();
+
+  const lower = emailAddresses.map((e) => e.toLowerCase());
+
+  const { data, error } = await supabase
+    .from("contacts")
+    .select("id, account_id, email, is_primary")
+    .in("email", lower)
+    .is("archived_at", null);
+
+  if (error) {
+    console.error("Contact lookup error:", error.message);
+    return new Map();
+  }
+
+  const map = new Map<string, ContactMatch>();
+  for (const contact of data ?? []) {
+    if (contact.email) {
+      map.set(contact.email.toLowerCase(), {
+        contact_id: contact.id,
+        account_id: contact.account_id,
+        is_primary: contact.is_primary,
+      });
+    }
+  }
+  return map;
+}
+
+/**
+ * Find the most recently created open opportunity for an account, used for
+ * auto-linking emails.
+ */
+async function findOpenOpportunity(
+  supabase: SupabaseClient,
+  accountId: string
+): Promise<string | null> {
+  const { data } = await supabase
+    .from("opportunities")
+    .select("id")
+    .eq("account_id", accountId)
+    .is("archived_at", null)
+    .not("stage", "in", '("closed_won","closed_lost")')
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  return data?.id ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Activity creation
+// ---------------------------------------------------------------------------
+
+/**
+ * Create an activity record for a matched email.
+ */
+async function createEmailActivity(
+  supabase: SupabaseClient,
+  conn: EmailSyncConnection,
+  email: ParsedEmail,
+  match: ContactMatch,
+  opportunityId: string | null
+) {
+  const dirLabel = email.direction === "sent" ? "Sent" : "Received";
+
+  const { error } = await supabase.from("activities").insert({
+    account_id: match.account_id,
+    contact_id: match.contact_id,
+    opportunity_id: opportunityId,
+    owner_user_id: conn.user_id,
+    activity_type: "email",
+    subject: `${dirLabel}: ${email.subject}`,
+    body: email.body,
+    completed_at: new Date(email.date).toISOString(),
+  });
+
+  if (error) {
+    console.error(`Failed to create activity for message ${email.messageId}:`, error.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sync orchestration for a single connection
+// ---------------------------------------------------------------------------
+
+async function syncConnection(
+  supabase: SupabaseClient,
+  conn: EmailSyncConnection
+): Promise<{ created: number; errors: number }> {
+  let created = 0;
+  let errors = 0;
+
+  try {
+    // 1. Ensure we have a valid access token
+    const accessToken = await ensureValidToken(supabase, conn);
+    const userEmail = conn.email_address ?? "";
+
+    // 2. Determine the starting point for this sync
+    const sinceDate =
+      conn.last_sync_at ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+    // 3. Fetch emails from the appropriate provider
+    const emails =
+      conn.provider === "gmail"
+        ? await fetchGmailEmails(accessToken, userEmail, sinceDate)
+        : await fetchOutlookEmails(accessToken, userEmail, sinceDate);
+
+    console.log(
+      `Fetched ${emails.length} emails for ${conn.provider} connection ${conn.id}`
+    );
+
+    // 4. Filter by direction based on config
+    const filteredEmails = emails.filter((e) => {
+      if (e.direction === "sent" && !conn.config.log_sent) return false;
+      if (e.direction === "received" && !conn.config.log_received) return false;
+      return true;
+    });
+
+    // 5. Collect all unique external email addresses to look up
+    const externalAddresses = new Set<string>();
+    for (const email of filteredEmails) {
+      if (email.direction === "sent") {
+        email.to.forEach((addr) => externalAddresses.add(addr.toLowerCase()));
+        email.cc.forEach((addr) => externalAddresses.add(addr.toLowerCase()));
+      } else {
+        externalAddresses.add(email.from.toLowerCase());
+      }
+    }
+
+    // 6. Match against CRM contacts
+    const contactMap = await matchContactsByEmail(
+      supabase,
+      Array.from(externalAddresses)
+    );
+
+    // 7. Create activities for matched emails
+    for (const email of filteredEmails) {
+      // Determine which email address(es) to check for a contact match
+      const addressesToCheck: string[] =
+        email.direction === "sent"
+          ? [...email.to, ...email.cc]
+          : [email.from];
+
+      for (const addr of addressesToCheck) {
+        const match = contactMap.get(addr.toLowerCase());
+        if (!match) continue;
+
+        // Skip non-primary contacts if the config requires it
+        if (conn.config.primary_only && !match.is_primary) continue;
+
+        // Optionally auto-link to an open opportunity
+        let opportunityId: string | null = null;
+        if (conn.config.auto_link_opps) {
+          opportunityId = await findOpenOpportunity(supabase, match.account_id);
+        }
+
+        await createEmailActivity(supabase, conn, email, match, opportunityId);
+        created++;
+        break; // one activity per email, matched to the first contact found
+      }
+    }
+
+    // 8. Update last_sync_at
+    await supabase
+      .from("email_sync_connections")
+      .update({ last_sync_at: new Date().toISOString() })
+      .eq("id", conn.id);
+  } catch (err) {
+    errors++;
+    console.error(
+      `Error syncing connection ${conn.id} (${conn.provider}):`,
+      (err as Error).message
+    );
+  }
+
+  return { created, errors };
+}
+
+// ---------------------------------------------------------------------------
+// Utility
+// ---------------------------------------------------------------------------
+
+/** Extract a bare email address from a header value like "Name <email>" */
+function extractEmail(header: string): string {
+  const match = header.match(/<([^>]+)>/);
+  if (match) return match[1].trim().toLowerCase();
+  return header.trim().toLowerCase();
+}
+
+// ---------------------------------------------------------------------------
+// Main handler
+// ---------------------------------------------------------------------------
+
+serve(async (req) => {
+  try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    const supabase = createClient(supabaseUrl, supabaseKey, {
+      auth: { persistSession: false },
+    });
+
+    // Fetch all active email sync connections
+    const { data: connections, error: connError } = await supabase
+      .from("email_sync_connections")
+      .select("*")
+      .eq("is_active", true);
+
+    if (connError) {
+      throw new Error(`Failed to load connections: ${connError.message}`);
+    }
+
+    if (!connections || connections.length === 0) {
+      return new Response(JSON.stringify({ message: "No active connections" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    console.log(`Processing ${connections.length} active connection(s)`);
+
+    let totalCreated = 0;
+    let totalErrors = 0;
+
+    // Process each connection sequentially to avoid rate-limit issues
+    for (const conn of connections as EmailSyncConnection[]) {
+      const result = await syncConnection(supabase, conn);
+      totalCreated += result.created;
+      totalErrors += result.errors;
+    }
+
+    return new Response(
+      JSON.stringify({
+        message: "Sync complete",
+        connections_processed: connections.length,
+        activities_created: totalCreated,
+        errors: totalErrors,
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  } catch (err) {
+    console.error("sync-emails fatal error:", (err as Error).message);
+    return new Response(
+      JSON.stringify({ error: (err as Error).message }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  }
+});

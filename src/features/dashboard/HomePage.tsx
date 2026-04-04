@@ -16,6 +16,10 @@ import {
   Clock,
   CheckCircle2,
   ListTodo,
+  Upload,
+  LogIn,
+  UserPlus,
+  Sparkles,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/features/auth/AuthProvider";
@@ -705,6 +709,68 @@ function MyOpenOpportunitiesSection({ userId }: { userId: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Getting Started (empty-state)
+// ---------------------------------------------------------------------------
+
+function GettingStartedCard() {
+  const navigate = useNavigate();
+
+  const steps = [
+    { label: "Log in to the CRM", done: true, icon: LogIn },
+    {
+      label: "Import your Salesforce data (Settings \u2192 Data Import)",
+      done: false,
+      icon: Upload,
+    },
+    { label: "Create your first account", done: false, icon: Building2 },
+    { label: "Add contacts to your accounts", done: false, icon: UserPlus },
+    { label: "Create an opportunity", done: false, icon: Target },
+  ];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Sparkles className="h-5 w-5 text-primary" />
+          Getting Started
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Here's what to do first:
+        </p>
+        <div className="space-y-3">
+          {steps.map((step, i) => (
+            <div key={i} className="flex items-center gap-3">
+              {step.done ? (
+                <CheckCircle2 className="h-5 w-5 text-green-600 shrink-0" />
+              ) : (
+                <div className="h-5 w-5 rounded border-2 border-muted-foreground/30 shrink-0" />
+              )}
+              <span
+                className={`text-sm ${step.done ? "line-through text-muted-foreground" : ""}`}
+              >
+                {i + 1}. {step.label}
+              </span>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-2 pt-2">
+          <Button onClick={() => navigate("/admin")}>
+            <Upload className="h-4 w-4 mr-2" />
+            Import Salesforce Data
+          </Button>
+          <Button variant="outline" onClick={() => navigate("/accounts/new")}>
+            <Plus className="h-4 w-4 mr-2" />
+            Create Account
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -749,6 +815,17 @@ export function HomePage() {
 
   const greeting = getGreeting();
 
+  // Determine if all metrics are zero (new/empty install)
+  const allMetricsZero =
+    !isMetricsLoading &&
+    roleCards.length > 0 &&
+    roleCards.every((card) => {
+      const v = card.value;
+      if (typeof v === "number") return v === 0;
+      if (typeof v === "string") return v === "$0" || v === "$0.00" || v === "0";
+      return false;
+    });
+
   return (
     <div className="space-y-6">
       {/* Welcome header */}
@@ -761,8 +838,13 @@ export function HomePage() {
         </p>
       </div>
 
-      {/* KPI Metric Cards */}
-      <MetricCardGrid cards={roleCards} loading={isMetricsLoading} />
+      {allMetricsZero ? (
+        /* Getting started empty state for new installs */
+        <GettingStartedCard />
+      ) : (
+        /* KPI Metric Cards */
+        <MetricCardGrid cards={roleCards} loading={isMetricsLoading} />
+      )}
 
       {/* Quick Actions */}
       <div>

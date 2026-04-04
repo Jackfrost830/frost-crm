@@ -19,6 +19,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import {
   Upload,
@@ -26,6 +27,9 @@ import {
   AlertTriangle,
   CheckCircle2,
   Info,
+  XCircle,
+  Download,
+  Clock,
 } from "lucide-react";
 
 /* ================================================================
@@ -34,15 +38,38 @@ import {
 
 type EntityType = "accounts" | "contacts" | "opportunities" | "leads";
 
+type MappingConfidence = "exact" | "fuzzy" | "unmapped";
+
 interface ColumnMapping {
   csvColumn: string;
   crmField: string;
+  confidence: MappingConfidence;
+}
+
+interface FailedRow {
+  rowNumber: number;
+  csvData: Record<string, string>;
+  error: string;
 }
 
 interface ImportResult {
   imported: number;
   skipped: number;
+  failed: number;
   errors: string[];
+  failedRows: FailedRow[];
+}
+
+interface ValidationIssue {
+  rowNumber: number;
+  type: "warning" | "skip";
+  message: string;
+}
+
+interface ValidationSummary {
+  willImport: number;
+  warnings: ValidationIssue[];
+  willSkip: ValidationIssue[];
 }
 
 /* ================================================================
@@ -262,6 +289,129 @@ function fieldLabel(key: string): string {
 }
 
 /* ================================================================
+   Fuzzy matching helpers
+   ================================================================ */
+
+/** Compute similarity between two strings (Dice coefficient on bigrams). */
+function stringSimilarity(a: string, b: string): number {
+  const s1 = a.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const s2 = b.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (s1 === s2) return 1;
+  if (s1.length < 2 || s2.length < 2) return 0;
+
+  const bigrams1 = new Map<string, number>();
+  for (let i = 0; i < s1.length - 1; i++) {
+    const bigram = s1.substring(i, i + 2);
+    bigrams1.set(bigram, (bigrams1.get(bigram) ?? 0) + 1);
+  }
+
+  let intersections = 0;
+  for (let i = 0; i < s2.length - 1; i++) {
+    const bigram = s2.substring(i, i + 2);
+    const count = bigrams1.get(bigram) ?? 0;
+    if (count > 0) {
+      bigrams1.set(bigram, count - 1);
+      intersections++;
+    }
+  }
+
+  return (2 * intersections) / (s1.length + s2.length - 2);
+}
+
+/** Try to fuzzy-match a CSV header to a CRM field. */
+function fuzzyMatchField(
+  header: string,
+  crmFields: string[]
+): { field: string; confidence: MappingConfidence } | null {
+  const normalized = header.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+  let bestField = "";
+  let bestScore = 0;
+
+  for (const field of crmFields) {
+    const fieldWords = field.replace(/_/g, " ");
+    const score = stringSimilarity(normalized, fieldWords);
+    if (score > bestScore) {
+      bestScore = score;
+      bestField = field;
+    }
+  }
+
+  if (bestScore >= 0.6) {
+    return { field: bestField, confidence: "fuzzy" };
+  }
+  return null;
+}
+
+/* ================================================================
+   Validation helpers
+   ================================================================ */
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function validateRow(
+  _rowIndex: number,
+  mapped: Record<string, string>,
+  entity: EntityType
+): { type: "warning" | "skip"; message: string } | null {
+  // Check email format if present
+  if (mapped.email && !EMAIL_REGEX.test(mapped.email)) {
+    return {
+      type: "warning",
+      message: `Invalid email format "${mapped.email}"`,
+    };
+  }
+
+  // Check required fields
+  if (entity === "accounts" && !mapped.name) {
+    return { type: "skip", message: "Missing required field \"name\"" };
+  }
+  if (entity === "contacts" && (!mapped.first_name || !mapped.last_name)) {
+    return { type: "skip", message: "Missing required field \"first_name\" or \"last_name\"" };
+  }
+  if (entity === "leads" && (!mapped.first_name || !mapped.last_name)) {
+    return { type: "skip", message: "Missing required field \"first_name\" or \"last_name\"" };
+  }
+  if (entity === "opportunities" && !mapped.name) {
+    return { type: "skip", message: "Missing required field \"name\"" };
+  }
+
+  return null;
+}
+
+/* ================================================================
+   CSV export for error report
+   ================================================================ */
+
+function escapeCsvField(value: string): string {
+  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+function downloadErrorReport(failedRows: FailedRow[]) {
+  if (failedRows.length === 0) return;
+
+  const csvHeaders = Object.keys(failedRows[0].csvData);
+  const header = [...csvHeaders.map(escapeCsvField), "Error"].join(",");
+  const rows = failedRows.map((fr) => {
+    const values = csvHeaders.map((h) => escapeCsvField(fr.csvData[h] ?? ""));
+    return [...values, escapeCsvField(fr.error)].join(",");
+  });
+  const csv = [header, ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `import-errors-${timestamp}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+/* ================================================================
    Component
    ================================================================ */
 
@@ -272,11 +422,15 @@ export function SalesforceImport() {
   const [mappings, setMappings] = useState<ColumnMapping[]>([]);
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
+  const [currentBatch, setCurrentBatch] = useState({ batch: 0, totalBatches: 0 });
+  const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [validation, setValidation] = useState<ValidationSummary | null>(null);
   const [duplicateAction, setDuplicateAction] = useState<"skip" | "update">(
     "skip"
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const importStartTimeRef = useRef<number>(0);
 
   /* ---------- File handling ---------- */
 
@@ -286,6 +440,7 @@ export function SalesforceImport() {
       if (!file) return;
 
       setResult(null);
+      setValidation(null);
 
       const reader = new FileReader();
       reader.onload = (evt) => {
@@ -301,12 +456,21 @@ export function SalesforceImport() {
         setCsvHeaders(headers);
         setCsvRows(dataRows);
 
-        // Auto-map columns
+        // Auto-map columns with confidence tracking
         const fieldMap = getFieldMap(entity);
+        const crmFields = getCRMFields(entity);
         const autoMappings: ColumnMapping[] = headers.map((h) => {
           const normalized = h.toLowerCase().trim();
-          const match = fieldMap[normalized];
-          return { csvColumn: h, crmField: match ?? "" };
+          const exactMatch = fieldMap[normalized];
+          if (exactMatch) {
+            return { csvColumn: h, crmField: exactMatch, confidence: "exact" as MappingConfidence };
+          }
+          // Try fuzzy match
+          const fuzzy = fuzzyMatchField(h, crmFields);
+          if (fuzzy) {
+            return { csvColumn: h, crmField: fuzzy.field, confidence: fuzzy.confidence };
+          }
+          return { csvColumn: h, crmField: "", confidence: "unmapped" as MappingConfidence };
         });
         setMappings(autoMappings);
         toast.success(`Loaded ${dataRows.length} rows from ${file.name}`);
@@ -319,7 +483,11 @@ export function SalesforceImport() {
   const updateMapping = useCallback(
     (csvColumn: string, crmField: string) => {
       setMappings((prev) =>
-        prev.map((m) => (m.csvColumn === csvColumn ? { ...m, crmField } : m))
+        prev.map((m) =>
+          m.csvColumn === csvColumn
+            ? { ...m, crmField, confidence: crmField ? "exact" : "unmapped" }
+            : m
+        )
       );
     },
     []
@@ -342,11 +510,81 @@ export function SalesforceImport() {
     return mapped;
   }
 
+  function buildCsvDataRow(
+    rowValues: string[],
+    headers: string[]
+  ): Record<string, string> {
+    const data: Record<string, string> = {};
+    headers.forEach((header, idx) => {
+      data[header] = rowValues[idx] ?? "";
+    });
+    return data;
+  }
+
   const previewRows = csvRows.slice(0, 5).map((row) =>
     buildMappedRow(row, csvHeaders, mappings)
   );
 
   const activeMappings = mappings.filter((m) => m.crmField !== "");
+
+  // Mapping stats
+  const autoMappedCount = mappings.filter(
+    (m) => m.confidence === "exact" || m.confidence === "fuzzy"
+  ).length;
+  const manualNeededCount = mappings.filter(
+    (m) => m.confidence === "unmapped" && m.crmField === ""
+  ).length;
+  const skippedCount = mappings.filter((m) => m.crmField === "").length;
+
+  /* ---------- Validation ---------- */
+
+  function runValidation(): ValidationSummary {
+    const warnings: ValidationIssue[] = [];
+    const willSkip: ValidationIssue[] = [];
+
+    // Check for duplicate SF IDs
+    const sfIdMapping = mappings.find((m) => m.crmField === "sf_id");
+    const sfIdColIndex = sfIdMapping
+      ? csvHeaders.indexOf(sfIdMapping.csvColumn)
+      : -1;
+    const seenSfIds = new Set<string>();
+
+    for (let i = 0; i < csvRows.length; i++) {
+      const row = csvRows[i];
+      const mapped = buildMappedRow(row, csvHeaders, mappings);
+
+      // Check for duplicate SF IDs within the file
+      if (sfIdColIndex >= 0) {
+        const sfId = row[sfIdColIndex];
+        if (sfId && seenSfIds.has(sfId)) {
+          willSkip.push({
+            rowNumber: i + 1,
+            type: "skip",
+            message: `Duplicate SF ID "${sfId}" within file`,
+          });
+          continue;
+        }
+        if (sfId) seenSfIds.add(sfId);
+      }
+
+      const issue = validateRow(i + 1, mapped, entity);
+      if (issue) {
+        if (issue.type === "skip") {
+          willSkip.push({ rowNumber: i + 1, ...issue });
+        } else {
+          warnings.push({ rowNumber: i + 1, ...issue });
+        }
+      }
+    }
+
+    const willImport = csvRows.length - willSkip.length;
+    return { willImport, warnings, willSkip };
+  }
+
+  function handleValidate() {
+    const summary = runValidation();
+    setValidation(summary);
+  }
 
   /* ---------- Import ---------- */
 
@@ -358,10 +596,13 @@ export function SalesforceImport() {
 
     setImporting(true);
     setResult(null);
+    importStartTimeRef.current = Date.now();
 
     const imported: number[] = [0];
-    const skipped: number[] = [0];
+    const skippedArr: number[] = [0];
+    const failedCount: number[] = [0];
     const errors: string[] = [];
+    const failedRows: FailedRow[] = [];
 
     try {
       // Pre-fetch lookup data
@@ -386,16 +627,23 @@ export function SalesforceImport() {
       const tableName = entity;
       const batchSize = 50;
       const total = csvRows.length;
+      const totalBatches = Math.ceil(total / batchSize);
       setProgress({ current: 0, total });
+      setCurrentBatch({ batch: 0, totalBatches });
 
       for (let i = 0; i < total; i += batchSize) {
+        const batchNum = Math.floor(i / batchSize) + 1;
+        setCurrentBatch({ batch: batchNum, totalBatches });
+
         const batch = csvRows.slice(i, i + batchSize);
         const records: Record<string, unknown>[] = [];
+        const recordRowIndices: number[] = [];
 
         for (let j = 0; j < batch.length; j++) {
           const rowIndex = i + j;
           const row = batch[j];
           const mapped = buildMappedRow(row, csvHeaders, mappings);
+          const csvData = buildCsvDataRow(row, csvHeaders);
 
           const record: Record<string, unknown> = {};
           let skipRow = false;
@@ -422,9 +670,10 @@ export function SalesforceImport() {
                 if (accountId) {
                   record.account_id = accountId;
                 } else {
-                  errors.push(
-                    `Row ${rowIndex + 1}: Account SF ID "${value}" not found in CRM`
-                  );
+                  const errMsg = `Account SF ID "${value}" not found in CRM`;
+                  errors.push(`Row ${rowIndex + 1}: ${errMsg}`);
+                  failedRows.push({ rowNumber: rowIndex + 1, csvData, error: errMsg });
+                  failedCount[0]++;
                   skipRow = true;
                 }
               }
@@ -459,42 +708,56 @@ export function SalesforceImport() {
           }
 
           if (skipRow) {
-            skipped[0]++;
             continue;
           }
 
           // Check for required fields
           if (entity === "accounts" && !record.name) {
-            errors.push(`Row ${rowIndex + 1}: Missing account name`);
-            skipped[0]++;
+            const errMsg = "Missing account name";
+            errors.push(`Row ${rowIndex + 1}: ${errMsg}`);
+            failedRows.push({ rowNumber: rowIndex + 1, csvData, error: errMsg });
+            failedCount[0]++;
             continue;
           }
           if (entity === "contacts" && (!record.first_name || !record.last_name)) {
-            errors.push(
-              `Row ${rowIndex + 1}: Missing first or last name`
-            );
-            skipped[0]++;
+            const errMsg = "Missing first or last name";
+            errors.push(`Row ${rowIndex + 1}: ${errMsg}`);
+            failedRows.push({ rowNumber: rowIndex + 1, csvData, error: errMsg });
+            failedCount[0]++;
             continue;
           }
           if (entity === "contacts" && !record.account_id) {
-            errors.push(
-              `Row ${rowIndex + 1}: Missing account reference`
-            );
-            skipped[0]++;
+            const errMsg = "Missing account reference";
+            errors.push(`Row ${rowIndex + 1}: ${errMsg}`);
+            failedRows.push({ rowNumber: rowIndex + 1, csvData, error: errMsg });
+            failedCount[0]++;
             continue;
           }
           if (entity === "opportunities" && (!record.name || !record.account_id)) {
-            errors.push(
-              `Row ${rowIndex + 1}: Missing name or account reference`
-            );
-            skipped[0]++;
+            const errMsg = "Missing name or account reference";
+            errors.push(`Row ${rowIndex + 1}: ${errMsg}`);
+            failedRows.push({ rowNumber: rowIndex + 1, csvData, error: errMsg });
+            failedCount[0]++;
             continue;
           }
           if (entity === "leads" && (!record.first_name || !record.last_name)) {
-            errors.push(
-              `Row ${rowIndex + 1}: Missing first or last name`
-            );
-            skipped[0]++;
+            const errMsg = "Missing first or last name";
+            errors.push(`Row ${rowIndex + 1}: ${errMsg}`);
+            failedRows.push({ rowNumber: rowIndex + 1, csvData, error: errMsg });
+            failedCount[0]++;
+            continue;
+          }
+
+          // Email validation
+          if (
+            record.email &&
+            typeof record.email === "string" &&
+            !EMAIL_REGEX.test(record.email)
+          ) {
+            const errMsg = `Invalid email format "${record.email}"`;
+            errors.push(`Row ${rowIndex + 1}: ${errMsg}`);
+            failedRows.push({ rowNumber: rowIndex + 1, csvData, error: errMsg });
+            failedCount[0]++;
             continue;
           }
 
@@ -514,10 +777,13 @@ export function SalesforceImport() {
           }
 
           records.push(record);
+          recordRowIndices.push(rowIndex);
         }
 
         if (records.length === 0) {
           setProgress({ current: Math.min(i + batchSize, total), total });
+          // Update ETA
+          updateETA(Math.min(i + batchSize, total), total);
           continue;
         }
 
@@ -544,7 +810,7 @@ export function SalesforceImport() {
           const sfId = record.sf_id as string | undefined;
           if (sfId && existingSfIds.has(sfId)) {
             if (duplicateAction === "skip") {
-              skipped[0]++;
+              skippedArr[0]++;
             } else {
               // Find existing record id
               const { data: existing } = await supabase
@@ -593,22 +859,50 @@ export function SalesforceImport() {
         }
 
         setProgress({ current: Math.min(i + batchSize, total), total });
+        updateETA(Math.min(i + batchSize, total), total);
       }
     } catch (err) {
       errors.push(`Unexpected error: ${(err as Error).message}`);
     }
 
     setImporting(false);
-    setResult({ imported: imported[0], skipped: skipped[0], errors });
+    setEstimatedTimeRemaining(null);
+    setResult({
+      imported: imported[0],
+      skipped: skippedArr[0],
+      failed: failedCount[0],
+      errors,
+      failedRows,
+    });
 
     if (errors.length === 0) {
       toast.success(
-        `Import complete: ${imported[0]} records imported, ${skipped[0]} skipped.`
+        `Import complete: ${imported[0]} records imported, ${skippedArr[0]} skipped.`
       );
     } else {
       toast.warning(
-        `Import finished with ${errors.length} error(s). See details below.`
+        `Import finished with ${errors.length} issue(s). See details below.`
       );
+    }
+  }
+
+  function updateETA(processed: number, total: number) {
+    if (processed === 0) {
+      setEstimatedTimeRemaining(null);
+      return;
+    }
+    const elapsed = Date.now() - importStartTimeRef.current;
+    const rate = processed / elapsed; // rows per ms
+    const remaining = total - processed;
+    const etaMs = remaining / rate;
+
+    if (etaMs < 1000) {
+      setEstimatedTimeRemaining("< 1 second");
+    } else if (etaMs < 60000) {
+      setEstimatedTimeRemaining(`~${Math.ceil(etaMs / 1000)} seconds`);
+    } else {
+      const mins = Math.ceil(etaMs / 60000);
+      setEstimatedTimeRemaining(`~${mins} minute${mins > 1 ? "s" : ""}`);
     }
   }
 
@@ -619,7 +913,10 @@ export function SalesforceImport() {
     setCsvRows([]);
     setMappings([]);
     setResult(null);
+    setValidation(null);
     setProgress({ current: 0, total: 0 });
+    setCurrentBatch({ batch: 0, totalBatches: 0 });
+    setEstimatedTimeRemaining(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -655,7 +952,7 @@ export function SalesforceImport() {
               Review the column mapping -- common Salesforce field names are
               auto-detected.
             </li>
-            <li>Preview your data and click Import.</li>
+            <li>Preview your data, validate, and click Import.</li>
           </ol>
         </CardContent>
       </Card>
@@ -719,8 +1016,25 @@ export function SalesforceImport() {
       {csvHeaders.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">
-              Step 3: Column Mapping
+            <CardTitle className="text-base flex items-center justify-between">
+              <span>Step 3: Column Mapping</span>
+              <div className="flex items-center gap-3 text-xs font-normal">
+                <span className="inline-flex items-center gap-1 text-green-600">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  {autoMappedCount} auto-mapped
+                </span>
+                {manualNeededCount > 0 && (
+                  <span className="inline-flex items-center gap-1 text-yellow-600">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    {manualNeededCount} unmapped
+                  </span>
+                )}
+                {skippedCount > 0 && (
+                  <span className="inline-flex items-center gap-1 text-muted-foreground">
+                    {skippedCount} skipped
+                  </span>
+                )}
+              </div>
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -728,6 +1042,7 @@ export function SalesforceImport() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10">Match</TableHead>
                     <TableHead>CSV Column</TableHead>
                     <TableHead>CRM Field</TableHead>
                     <TableHead>Sample Value</TableHead>
@@ -736,16 +1051,34 @@ export function SalesforceImport() {
                 <TableBody>
                   {mappings.map((m, idx) => (
                     <TableRow key={m.csvColumn}>
+                      <TableCell>
+                        {m.crmField ? (
+                          m.confidence === "exact" ? (
+                            <CheckCircle2 className="h-4 w-4 text-green-600" />
+                          ) : m.confidence === "fuzzy" ? (
+                            <AlertTriangle className="h-4 w-4 text-yellow-500" />
+                          ) : (
+                            <CheckCircle2 className="h-4 w-4 text-green-600" />
+                          )
+                        ) : (
+                          <XCircle className="h-4 w-4 text-muted-foreground/40" />
+                        )}
+                      </TableCell>
                       <TableCell className="font-medium">
                         {m.csvColumn}
+                        {m.confidence === "fuzzy" && m.crmField && (
+                          <Badge variant="outline" className="ml-2 text-[10px] px-1 py-0 text-yellow-600 border-yellow-300">
+                            fuzzy
+                          </Badge>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Select
-                          value={m.crmField || "skip"}
+                          value={m.crmField || "__skip__"}
                           onValueChange={(v) =>
                             updateMapping(
                               m.csvColumn,
-                              v === "skip" ? "" : v
+                              v === "__skip__" ? "" : v
                             )
                           }
                         >
@@ -753,8 +1086,8 @@ export function SalesforceImport() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="skip">
-                              -- Skip --
+                            <SelectItem value="__skip__">
+                              -- Skip this column --
                             </SelectItem>
                             {crmFields.map((f) => (
                               <SelectItem key={f} value={f}>
@@ -816,13 +1149,81 @@ export function SalesforceImport() {
         </Card>
       )}
 
-      {/* Step 5: Import */}
-      {csvRows.length > 0 && activeMappings.length > 0 && (
+      {/* Validation Preview */}
+      {csvRows.length > 0 && activeMappings.length > 0 && !result && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">Step 5: Import</CardTitle>
+            <CardTitle className="text-base">
+              Step 5: Validate & Import
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Validate button */}
+            {!validation && (
+              <Button variant="outline" onClick={handleValidate}>
+                <CheckCircle2 className="h-4 w-4 mr-1.5" />
+                Validate Before Import
+              </Button>
+            )}
+
+            {/* Validation summary */}
+            {validation && (
+              <div className="rounded-md border p-4 space-y-3">
+                <h4 className="text-sm font-medium">Validation Summary</h4>
+                <div className="flex items-center gap-4 text-sm">
+                  <span className="inline-flex items-center gap-1.5 text-green-600">
+                    <CheckCircle2 className="h-4 w-4" />
+                    {validation.willImport} rows will be imported
+                  </span>
+                  {validation.warnings.length > 0 && (
+                    <span className="inline-flex items-center gap-1.5 text-yellow-600">
+                      <AlertTriangle className="h-4 w-4" />
+                      {validation.warnings.length} rows have warnings
+                    </span>
+                  )}
+                  {validation.willSkip.length > 0 && (
+                    <span className="inline-flex items-center gap-1.5 text-destructive">
+                      <XCircle className="h-4 w-4" />
+                      {validation.willSkip.length} rows will be skipped
+                    </span>
+                  )}
+                </div>
+
+                {/* Warning details */}
+                {validation.warnings.length > 0 && (
+                  <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-md p-3">
+                    <p className="text-xs font-medium text-yellow-700 dark:text-yellow-400 mb-1">
+                      Warnings:
+                    </p>
+                    <ul className="text-xs text-yellow-600 dark:text-yellow-500 space-y-0.5 max-h-32 overflow-y-auto">
+                      {validation.warnings.map((w, idx) => (
+                        <li key={idx}>
+                          Row {w.rowNumber}: {w.message}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Skip details */}
+                {validation.willSkip.length > 0 && (
+                  <div className="bg-destructive/5 border border-destructive/20 rounded-md p-3">
+                    <p className="text-xs font-medium text-destructive mb-1">
+                      Will be skipped:
+                    </p>
+                    <ul className="text-xs text-destructive space-y-0.5 max-h-32 overflow-y-auto">
+                      {validation.willSkip.map((s, idx) => (
+                        <li key={idx}>
+                          Row {s.rowNumber}: {s.message}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Import controls */}
             <div className="flex items-center gap-4">
               <div className="space-y-1">
                 <Label>Duplicate Handling (by SF ID)</Label>
@@ -851,7 +1252,7 @@ export function SalesforceImport() {
                 >
                   <Upload className="h-4 w-4 mr-1" />
                   {importing
-                    ? `Importing... (${progress.current} of ${progress.total})`
+                    ? `Importing...`
                     : `Import ${csvRows.length} rows`}
                 </Button>
                 <Button
@@ -866,7 +1267,7 @@ export function SalesforceImport() {
 
             {/* Progress bar */}
             {importing && (
-              <div className="space-y-1">
+              <div className="space-y-2">
                 <div className="flex justify-between text-xs text-muted-foreground">
                   <span>
                     Importing row {progress.current} of {progress.total}
@@ -879,45 +1280,107 @@ export function SalesforceImport() {
                     style={{ width: `${progressPercent}%` }}
                   />
                 </div>
-              </div>
-            )}
-
-            {/* Results */}
-            {result && (
-              <div className="space-y-3 pt-2">
-                <div className="flex items-center gap-4 text-sm">
-                  <span className="inline-flex items-center gap-1 text-green-600">
-                    <CheckCircle2 className="h-4 w-4" />
-                    {result.imported} imported
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span className="inline-flex items-center gap-1">
+                    <FileSpreadsheet className="h-3 w-3" />
+                    Batch {currentBatch.batch} of {currentBatch.totalBatches}
                   </span>
-                  {result.skipped > 0 && (
-                    <span className="inline-flex items-center gap-1 text-yellow-600">
-                      <AlertTriangle className="h-4 w-4" />
-                      {result.skipped} skipped
-                    </span>
-                  )}
-                  {result.errors.length > 0 && (
-                    <span className="inline-flex items-center gap-1 text-destructive">
-                      <AlertTriangle className="h-4 w-4" />
-                      {result.errors.length} error(s)
+                  {estimatedTimeRemaining && (
+                    <span className="inline-flex items-center gap-1">
+                      <Clock className="h-3 w-3" />
+                      {estimatedTimeRemaining} remaining
                     </span>
                   )}
                 </div>
-
-                {result.errors.length > 0 && (
-                  <div className="bg-destructive/5 border border-destructive/20 rounded-md p-3 max-h-48 overflow-y-auto">
-                    <p className="text-sm font-medium text-destructive mb-1">
-                      Errors:
-                    </p>
-                    <ul className="text-xs text-destructive space-y-0.5">
-                      {result.errors.map((err, idx) => (
-                        <li key={idx}>{err}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
               </div>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Import Results Summary */}
+      {result && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              {result.failed === 0 && result.errors.length === 0 ? (
+                <CheckCircle2 className="h-5 w-5 text-green-600" />
+              ) : (
+                <AlertTriangle className="h-5 w-5 text-yellow-600" />
+              )}
+              Import Complete
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-sm text-green-600">
+                <CheckCircle2 className="h-4 w-4" />
+                {result.imported} records imported successfully
+              </div>
+              {result.skipped > 0 && (
+                <div className="flex items-center gap-2 text-sm text-yellow-600">
+                  <AlertTriangle className="h-4 w-4" />
+                  {result.skipped} records skipped (duplicate SF ID)
+                </div>
+              )}
+              {result.failed > 0 && (
+                <div className="flex items-center gap-2 text-sm text-destructive">
+                  <XCircle className="h-4 w-4" />
+                  {result.failed} records failed (details below)
+                </div>
+              )}
+            </div>
+
+            {/* Failed rows details */}
+            {result.failedRows.length > 0 && (
+              <div className="space-y-3">
+                <div className="bg-destructive/5 border border-destructive/20 rounded-md p-3 max-h-48 overflow-y-auto">
+                  <p className="text-sm font-medium text-destructive mb-2">
+                    Failed rows:
+                  </p>
+                  <ul className="text-xs text-destructive space-y-1">
+                    {result.failedRows.map((fr, idx) => (
+                      <li key={idx}>
+                        <span className="font-medium">Row {fr.rowNumber}:</span>{" "}
+                        {fr.error}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => downloadErrorReport(result.failedRows)}
+                >
+                  <Download className="h-4 w-4 mr-1.5" />
+                  Download Error Report
+                </Button>
+              </div>
+            )}
+
+            {/* Non-row-specific errors (batch errors) */}
+            {result.errors.length > 0 && result.errors.some((e) => !result.failedRows.some((fr) => e.includes(`Row ${fr.rowNumber}`))) && (
+              <div className="bg-destructive/5 border border-destructive/20 rounded-md p-3 max-h-48 overflow-y-auto">
+                <p className="text-sm font-medium text-destructive mb-1">
+                  Other errors:
+                </p>
+                <ul className="text-xs text-destructive space-y-0.5">
+                  {result.errors
+                    .filter((e) => !result.failedRows.some((fr) => e.startsWith(`Row ${fr.rowNumber}:`)))
+                    .map((err, idx) => (
+                      <li key={idx}>{err}</li>
+                    ))}
+                </ul>
+              </div>
+            )}
+
+            <Button
+              variant="outline"
+              onClick={handleReset}
+            >
+              Start New Import
+            </Button>
           </CardContent>
         </Card>
       )}
