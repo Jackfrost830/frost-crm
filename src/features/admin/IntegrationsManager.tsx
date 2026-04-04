@@ -16,6 +16,7 @@ import { Separator } from "@/components/ui/separator";
 import { integrations, type Integration } from "./integrations-config";
 import { WebhooksManager } from "./WebhooksManager";
 import { EmailIntegrationSettings } from "./EmailIntegrationSettings";
+import { PandaDocSettings } from "./PandaDocSettings";
 
 interface IntegrationsManagerProps {
   onNavigateTab?: (tab: string) => void;
@@ -127,6 +128,10 @@ export function IntegrationsManager({
       </div>
 
       <EmailIntegrationSettings />
+
+      <Separator />
+
+      <PandaDocSettings />
 
       <Separator />
 

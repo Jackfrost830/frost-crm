@@ -28,6 +28,7 @@ import {
   formatDate,
   formatCurrency,
 } from "@/lib/formatters";
+// lifecycleLabel kept for collapsible Details section
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { AccountContacts } from "./AccountContacts";
@@ -169,11 +170,6 @@ export function AccountDetail() {
               variant="status"
               label={statusLabel(account.status)}
             />
-            <StatusBadge
-              value={account.lifecycle_status}
-              variant="lifecycle"
-              label={lifecycleLabel(account.lifecycle_status)}
-            />
             <Button variant="outline" size="sm" onClick={() => navigate(`/opportunities/new?account_id=${id}`)}>
               <Plus className="h-4 w-4 mr-1" />
               New Opportunity
@@ -277,6 +273,7 @@ export function AccountDetail() {
       <CollapsibleSection title="Details">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
           <Field label="Account Type" value={account.account_type} />
+          <Field label="Customer Type" value={lifecycleLabel(account.lifecycle_status)} />
           <Field label="Active Since" value={formatDate(account.active_since)} />
           <Field label="Timezone" value={account.timezone} />
           <Field

@@ -114,6 +114,8 @@ export interface Product {
   description: string | null;
   is_active: boolean;
   default_arr: number | null;
+  category: string | null;
+  pricing_model: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -289,6 +291,28 @@ export interface AuditLog {
   changed_at: string;
   old_data: Record<string, unknown> | null;
   new_data: Record<string, unknown> | null;
+}
+
+export interface PriceBook {
+  id: string;
+  name: string;
+  is_default: boolean;
+  is_active: boolean;
+  description: string | null;
+  effective_date: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PriceBookEntry {
+  id: string;
+  price_book_id: string;
+  product_id: string;
+  fte_range: string | null;
+  unit_price: number;
+  created_at: string;
+  updated_at: string;
+  product?: Product;
 }
 
 // View types

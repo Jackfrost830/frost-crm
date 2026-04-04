@@ -6,6 +6,7 @@ import {
   UserPlus,
   Target,
   Kanban,
+  Package,
   RefreshCw,
   BarChart3,
   Archive,
@@ -40,6 +41,7 @@ const navItems = [
   { to: "/leads", icon: UserPlus, label: "Leads" },
   { to: "/opportunities", icon: Target, label: "Opportunities" },
   { to: "/pipeline", icon: Kanban, label: "Pipeline" },
+  { to: "/products", icon: Package, label: "Products" },
   { to: "/renewals", icon: RefreshCw, label: "Renewals" },
   { to: "/reports", icon: BarChart3, label: "Reports" },
 ];

@@ -39,8 +39,10 @@ export const integrations: Integration[] = [
     description:
       "Sync contracts and proposals. Auto-populate contract dates and products on accounts.",
     icon: FileText,
-    status: "coming_soon",
+    status: "available",
     category: "documents",
+    actionLabel: "Configure",
+    actionTab: "pandadoc",
   },
   {
     id: "gmail",

@@ -10,6 +10,7 @@ import { RequiredFieldsManager } from "./RequiredFieldsManager";
 import { IntegrationsManager } from "./IntegrationsManager";
 import { SalesforceImport } from "./SalesforceImport";
 import { AuditLogViewer } from "./AuditLogViewer";
+import { AutomationsManager } from "./AutomationsManager";
 import { SystemInfo } from "./SystemInfo";
 import { Loader2 } from "lucide-react";
 
@@ -52,6 +53,7 @@ export function AdminSettings() {
           <TabsTrigger value="permissions">Permissions</TabsTrigger>
           <TabsTrigger value="required-fields">Required Fields</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
+          <TabsTrigger value="automations">Automations</TabsTrigger>
           <TabsTrigger value="data-import">Data Import</TabsTrigger>
           <TabsTrigger value="audit-log">Audit Log</TabsTrigger>
           <TabsTrigger value="system">System</TabsTrigger>
@@ -110,6 +112,10 @@ export function AdminSettings() {
 
         <TabsContent value="integrations">
           <IntegrationsManager onNavigateTab={setActiveTab} />
+        </TabsContent>
+
+        <TabsContent value="automations">
+          <AutomationsManager />
         </TabsContent>
 
         <TabsContent value="data-import">

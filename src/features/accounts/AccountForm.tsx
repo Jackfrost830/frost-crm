@@ -272,25 +272,6 @@ export function AccountForm() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Lifecycle Status<RequiredIndicator fieldKey="lifecycle_status" requiredFields={requiredKeys} /></Label>
-                  <Select
-                    value={watch("lifecycle_status")}
-                    onValueChange={(v) =>
-                      setValue("lifecycle_status", v as AccountFormValues["lifecycle_status"])
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="prospect">Prospect</SelectItem>
-                      <SelectItem value="customer">Customer</SelectItem>
-                      <SelectItem value="former_customer">Former Customer</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
                   <Label>Owner<RequiredIndicator fieldKey="owner_user_id" requiredFields={requiredKeys} /></Label>
                   <Select
                     value={watch("owner_user_id") ?? "unassigned"}
@@ -356,6 +337,24 @@ export function AccountForm() {
                 <div className="space-y-2">
                   <Label htmlFor="annual_revenue">Annual Revenue<RequiredIndicator fieldKey="annual_revenue" requiredFields={requiredKeys} /></Label>
                   <Input id="annual_revenue" type="number" step="0.01" {...register("annual_revenue")} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Customer Type<RequiredIndicator fieldKey="lifecycle_status" requiredFields={requiredKeys} /></Label>
+                  <Select
+                    value={watch("lifecycle_status")}
+                    onValueChange={(v) =>
+                      setValue("lifecycle_status", v as AccountFormValues["lifecycle_status"])
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="prospect">Prospect</SelectItem>
+                      <SelectItem value="customer">Customer</SelectItem>
+                      <SelectItem value="former_customer">Former Customer</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
             </FormSection>

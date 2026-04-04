@@ -5,6 +5,7 @@ import type { Account, AccountContract } from "@/types/crm";
 interface AccountFilters {
   search?: string;
   lifecycle_status?: string;
+  status?: string;
   page?: number;
   pageSize?: number;
 }
@@ -26,6 +27,9 @@ export function useAccounts(filters?: AccountFilters) {
       }
       if (filters?.lifecycle_status) {
         query = query.eq("lifecycle_status", filters.lifecycle_status);
+      }
+      if (filters?.status) {
+        query = query.eq("status", filters.status);
       }
 
       const { data, error, count } = await query;

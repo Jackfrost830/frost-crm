@@ -25,6 +25,7 @@ const OpportunitiesList = lazy(() => import("@/features/opportunities/Opportunit
 const OpportunityDetail = lazy(() => import("@/features/opportunities/OpportunityDetail").then(m => ({ default: m.OpportunityDetail })));
 const OpportunityForm = lazy(() => import("@/features/opportunities/OpportunityForm").then(m => ({ default: m.OpportunityForm })));
 const PipelineBoard = lazy(() => import("@/features/opportunities/PipelineBoard").then(m => ({ default: m.PipelineBoard })));
+const ProductsPage = lazy(() => import("@/features/products/ProductsPage").then(m => ({ default: m.ProductsPage })));
 const RenewalsQueue = lazy(() => import("@/features/renewals/RenewalsQueue").then(m => ({ default: m.RenewalsQueue })));
 const ReportBuilder = lazy(() => import("@/features/reports/ReportBuilder").then(m => ({ default: m.ReportBuilder })));
 const ArchiveManager = lazy(() => import("@/features/archive/ArchiveManager").then(m => ({ default: m.ArchiveManager })));
@@ -58,6 +59,7 @@ export default function App() {
                   <Route path="opportunities/:id" element={<OpportunityDetail />} />
                   <Route path="opportunities/:id/edit" element={<OpportunityForm />} />
                   <Route path="pipeline" element={<PipelineBoard />} />
+                  <Route path="products" element={<ProductsPage />} />
                   <Route path="renewals" element={<RenewalsQueue />} />
                   <Route path="reports" element={<ReportBuilder />} />
                   <Route path="archive" element={<ArchiveManager />} />

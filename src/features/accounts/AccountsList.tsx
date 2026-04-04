@@ -26,7 +26,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { lifecycleLabel, statusLabel, formatDate } from "@/lib/formatters";
+import { statusLabel, formatDate } from "@/lib/formatters";
 
 const PAGE_SIZE = 25;
 
@@ -39,7 +39,7 @@ export function AccountsList() {
 
   const { data: result, isLoading } = useAccounts({
     search: search || undefined,
-    lifecycle_status: statusFilter !== "all" ? statusFilter : undefined,
+    status: statusFilter !== "all" ? statusFilter : undefined,
     page,
     pageSize: PAGE_SIZE,
   });
@@ -130,9 +130,11 @@ export function AccountsList() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Statuses</SelectItem>
-            <SelectItem value="prospect">Prospect</SelectItem>
-            <SelectItem value="customer">Customer</SelectItem>
-            <SelectItem value="former_customer">Former Customer</SelectItem>
+            <SelectItem value="discovery">Discovery</SelectItem>
+            <SelectItem value="pending">Pending</SelectItem>
+            <SelectItem value="active">Active</SelectItem>
+            <SelectItem value="inactive">Inactive</SelectItem>
+            <SelectItem value="churned">Churned</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -195,18 +197,11 @@ export function AccountsList() {
                       </Link>
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-1.5">
-                        <StatusBadge
-                          value={account.lifecycle_status}
-                          variant="lifecycle"
-                          label={lifecycleLabel(account.lifecycle_status)}
-                        />
-                        <StatusBadge
-                          value={account.status}
-                          variant="status"
-                          label={statusLabel(account.status)}
-                        />
-                      </div>
+                      <StatusBadge
+                        value={account.status}
+                        variant="status"
+                        label={statusLabel(account.status)}
+                      />
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {account.owner?.full_name ?? "Unassigned"}
