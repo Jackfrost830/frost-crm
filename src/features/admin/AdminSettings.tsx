@@ -10,6 +10,7 @@ import { RequiredFieldsManager } from "./RequiredFieldsManager";
 import { IntegrationsManager } from "./IntegrationsManager";
 import { SalesforceImport } from "./SalesforceImport";
 import { AuditLogViewer } from "./AuditLogViewer";
+import { SystemInfo } from "./SystemInfo";
 import { Loader2 } from "lucide-react";
 
 export function AdminSettings() {
@@ -53,6 +54,7 @@ export function AdminSettings() {
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
           <TabsTrigger value="data-import">Data Import</TabsTrigger>
           <TabsTrigger value="audit-log">Audit Log</TabsTrigger>
+          <TabsTrigger value="system">System</TabsTrigger>
         </TabsList>
 
         <TabsContent value="custom-fields">
@@ -123,6 +125,18 @@ export function AdminSettings() {
               </p>
             </div>
             <AuditLogViewer />
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="system">
+          <Card className="p-6">
+            <div className="space-y-1 mb-6">
+              <h2 className="text-lg font-semibold">System Information</h2>
+              <p className="text-sm text-muted-foreground">
+                App version, build details, and database statistics.
+              </p>
+            </div>
+            <SystemInfo />
           </Card>
         </TabsContent>
       </Tabs>

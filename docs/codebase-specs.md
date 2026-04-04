@@ -4,7 +4,7 @@
 
 Internal CRM replacing Salesforce for Medcurity's sales and renewals workflows. Built as a React SPA backed by Supabase (Postgres + Auth + RLS).
 
-**Status:** MVP build in progress. Core CRUD, pipeline, renewals, report builder, activity tracking, and global search are functional. Overnight improvements added pagination, bulk actions, CSV export, required field enforcement, code splitting, mobile responsive, and enhanced detail pages.
+**Status:** MVP feature-complete. Core CRUD, pipeline, renewals, report builder, activity tracking, and global search are functional. Additional features: pagination, bulk actions, CSV export, required field enforcement, code splitting, mobile responsive, enhanced detail pages, keyboard shortcuts, user onboarding wizard, email integration (OAuth UI + Edge Function), report chart visualizations, and polished Salesforce import.
 
 **Staging project:** https://supabase.com/dashboard/project/baekcgdyjedgxmejbytc
 
@@ -44,6 +44,8 @@ src/
 │   │   └── Sidebar.tsx              # Collapsible nav with role-aware items + search
 │   ├── ui/                          # shadcn/ui component library (23+ components)
 │   ├── GlobalSearch.tsx             # Cmd+K command palette (accounts/contacts/opps)
+│   ├── QuickCreateDialog.tsx        # Cmd+N quick create command palette
+│   ├── KeyboardShortcutsDialog.tsx  # Cmd+/ shortcut reference dialog
 │   ├── PageHeader.tsx               # Consistent page header with actions slot
 │   ├── StatusBadge.tsx              # Color-coded badges for stage/lifecycle/kind
 │   ├── EmptyState.tsx               # Empty state with icon, message, CTA
@@ -59,7 +61,8 @@ src/
 │   ├── auth/
 │   │   ├── AuthProvider.tsx         # Session + profile context
 │   │   ├── LoginPage.tsx            # Email/password login
-│   │   └── ProtectedRoute.tsx       # Auth guard + profile check
+│   │   ├── ProtectedRoute.tsx       # Auth guard + profile check
+│   │   └── WelcomeWizard.tsx        # First-login onboarding wizard (4 steps)
 │   ├── dashboard/
 │   │   └── HomePage.tsx             # Role-aware KPI dashboard
 │   ├── accounts/
@@ -120,17 +123,25 @@ src/
 │   │   ├── IntegrationsManager.tsx  # Integration cards grid
 │   │   ├── integrations-config.ts   # Integration catalog definitions
 │   │   ├── WebhooksManager.tsx      # Webhook config (coming soon)
-│   │   └── SalesforceImport.tsx     # CSV import with field mapping
+│   │   ├── SalesforceImport.tsx     # CSV import with field mapping
+│   │   ├── EmailIntegrationSettings.tsx # Gmail/Outlook OAuth connection UI
+│   │   ├── EmailSyncConfig.tsx      # Email sync preference toggles
+│   │   ├── SystemInfo.tsx           # System info panel (version, DB stats, build info)
 │   │   └── UsersManager.tsx         # User role + active management
 │   └── NotFound.tsx                 # 404 page
 ├── hooks/
 │   ├── useCustomFields.ts           # Custom field definitions hook
-│   └── useRequiredFields.ts         # Fetches required field config from DB
+│   ├── useRequiredFields.ts         # Fetches required field config from DB
+│   └── useKeyboardShortcuts.ts      # Global keyboard shortcuts (Cmd+N, Cmd+/, G-then-X nav chords)
 
 supabase/
 ├── migrations/
 │   ├── 20260331_initial_schema.sql                     # Core schema (633 lines)
-│   └── 20260403_pipeline_views_and_saved_reports.sql   # Custom pipelines + saved reports
+│   ├── 20260403_pipeline_views_and_saved_reports.sql   # Custom pipelines + saved reports
+│   └── 20260404_email_sync.sql                         # email_sync_connections table
+├── functions/
+│   └── sync-emails/
+│       └── index.ts                                    # Edge Function for email sync
 └── seed.sql                                            # 3 sample products
 ```
 
@@ -182,6 +193,7 @@ supabase/
 | `leads` | Sales leads with conversion tracking | Yes |
 | `custom_field_definitions` | Admin-defined custom fields per entity | No |
 | `required_field_config` | Required field settings per entity | No |
+| `email_sync_connections` | OAuth tokens + sync config for Gmail/Outlook | No |
 
 ### Custom Enums
 
@@ -428,6 +440,7 @@ supabase/
 - **Required Fields tab**: Toggle which fields are required for saving each entity type (Accounts, Contacts, Opportunities, Leads)
 - **Integrations tab**: Grid of available connectors (PandaDoc, Gmail, Outlook, Google Calendar, Slack, QuickBooks, Zapier, Salesforce) with status badges
 - **Data Import tab**: Full Salesforce CSV import with auto-column mapping, preview, batch import with progress, duplicate detection by SF ID
+- **System tab**: App version, build info, connected Supabase project URL, database table counts, last migration applied
 - Admin-only access enforced via role check
 
 ### Duplicate Detection
@@ -472,6 +485,45 @@ supabase/
 - **QuickTaskDialog** for fast task creation (subject, due date, notes)
 - **My Tasks widget** on Home dashboard showing user's open/completed tasks with inline completion
 
+### Email Integration (OAuth)
+- Settings UI for connecting Gmail/Outlook via OAuth (`EmailIntegrationSettings.tsx`)
+- Email sync preference toggles: log sent/received, primary contacts only, auto-link to opportunities (`EmailSyncConfig.tsx`)
+- Edge Function code ready for deployment (`supabase/functions/sync-emails/`)
+- Matches emails to contacts by email address, auto-creates activities
+- `email_sync_connections` table stores OAuth tokens, provider, sync state, and user preferences
+- Requires Google Cloud + Azure AD OAuth app registration (documented in README)
+
+### Report Chart Visualizations
+- Toggle between Table, Bar Chart, and Pie Chart views on report results
+- Auto-detects best columns for chart axes (first string column for X, first numeric for Y)
+- Dropdown overrides for X/Y axis and label/value selection
+- Powered by recharts (BarChart, PieChart)
+
+### Salesforce Import Polish
+- Validation preview before import showing warnings, skip counts, and ready-to-import counts
+- Field mapping confidence indicators: green = exact match, yellow = fuzzy match, red = unmapped
+- Fuzzy column matching using bigram similarity scoring
+- Batch progress with time estimates (elapsed / remaining)
+- Error CSV download for failed rows
+- Detailed import results summary with success/skip/error breakdown
+
+### User Onboarding
+- 4-step welcome wizard on first login (`WelcomeWizard.tsx`): Welcome, Profile Setup, Quick Tour, Get Started
+- Getting-started checklist on empty dashboard with progress tracking
+- Uses localStorage to track wizard completion and checklist state
+
+### Keyboard Shortcuts
+- `Cmd+K`: Global search (existing)
+- `Cmd+N`: Quick create dialog — Account, Contact, Lead, or Opportunity (`QuickCreateDialog.tsx`)
+- `Cmd+/`: Keyboard shortcuts help dialog (`KeyboardShortcutsDialog.tsx`)
+- `G then H`: Navigate to Home
+- `G then A`: Navigate to Accounts
+- `G then L`: Navigate to Leads
+- `G then O`: Navigate to Opportunities
+- `G then P`: Navigate to Pipeline
+- `G then R`: Navigate to Reports
+- Implemented via `useKeyboardShortcuts` hook with chord detection (500ms timeout)
+
 ### Inline Opportunity Product Management
 - "Add Product" button on Opportunity detail Products tab
 - Product selector dropdown with auto-fill from default_arr
@@ -511,6 +563,10 @@ Creates `pipeline_views` and `saved_reports` tables with full RLS policies.
 - `sf_id` columns on accounts, contacts, opportunities, leads (with unique indexes)
 - Duplicate detection RPCs: `find_duplicate_accounts`, `find_duplicate_contacts`, `find_duplicate_leads`
 
+### `20260404_email_sync.sql` (needs to be applied)
+- `email_sync_connections` table: stores OAuth provider, tokens, sync preferences, and last sync timestamp per user
+- RLS policies for user-level access to own connections
+
 **All migrations have been applied** via the combined `run_all_migrations_and_seed.sql` file. Test data has been seeded (5 accounts, 7 contacts, 9 opportunities, 5 leads, 8 activities with product linkage).
 
 ## Environment Variables
@@ -528,27 +584,25 @@ npm run dev        # Starts on localhost:5175 (or next available port)
 npm run build      # TypeScript check + Vite production build
 ```
 
-## Email Integration Architecture (Future)
+## Email Integration Architecture
 
-The current system supports manual email logging via the Log Email dialog. The planned automated approach uses **OAuth** (not BCC) so team members don't have to remember anything:
+The system supports both manual email logging (Log Email dialog) and automated OAuth-based sync. The OAuth approach requires no BCC or browser plugins.
 
-1. **OAuth Email Sync (Priority)**: Connect Gmail/Outlook via OAuth. A Supabase Edge Function polls for new emails, matches sender/recipient against known contacts by email address, and auto-creates activity records. This is fully automatic — no BCC, no browser plugin, no manual logging required. Users authorize once and all emails to/from CRM contacts are logged.
+1. **OAuth Email Sync (Built)**: Settings UI for connecting Gmail/Outlook via OAuth. Edge Function (`supabase/functions/sync-emails/`) polls for new emails, matches sender/recipient against known contacts by email address, and auto-creates activity records. Users authorize once and all emails to/from CRM contacts are logged. Configurable preferences: log sent/received, primary contacts only, auto-link to opportunities.
 
-2. **Implementation**: Edge Function runs on a cron schedule (e.g., every 5 minutes), fetches new emails since last poll, matches against contacts table by email, creates activity entries with `activity_type: 'email'`, links to the correct account/contact/opportunity.
+2. **Implementation**: Edge Function designed for cron schedule (e.g., every 5 minutes), fetches new emails since last poll via Gmail API / Microsoft Graph, matches against contacts table by email, creates activity entries with `activity_type: 'email'`, links to the correct account/contact/opportunity. OAuth tokens stored in `email_sync_connections` table.
 
-3. **PandaDoc Integration (Phase 3)**: Connect PandaDoc via API to automatically sync signed contracts to the account level. Contracts would link to the relevant opportunity and populate contract start/end dates, service details, and product breakdowns.
+3. **Deployment**: Requires Google Cloud OAuth app registration (Gmail) and/or Azure AD app registration (Outlook). See README for setup instructions. Edge Function needs `supabase functions deploy sync-emails`.
+
+4. **PandaDoc Integration (Phase 3)**: Connect PandaDoc via API to automatically sync signed contracts to the account level. Contracts would link to the relevant opportunity and populate contract start/end dates, service details, and product breakdowns.
 
 ## What's Next
 
-- [ ] OAuth Gmail/Outlook email sync (auto-log emails — no BCC needed)
+- [ ] Deploy email sync Edge Function (needs Google Cloud + Azure AD OAuth app registration)
 - [ ] PandaDoc contract sync (auto-populate contract dates and products)
-- [ ] Salesforce historical data import (tool built, needs testing with real data)
 - [ ] Inline field editing on detail pages (click to edit in place)
-- [ ] Dashboard customization (drag/drop widgets)
+- [ ] Dashboard widget customization (drag/drop layout)
 - [ ] Forecasting views
 - [ ] Notification system for renewals/tasks (due date reminders)
-- [ ] User onboarding wizard
-- [ ] Kanban view for leads (like pipeline board but for lead stages)
 - [ ] Activity calendar view
 - [ ] Print/PDF export for account summaries
-- [ ] API rate limiting and error retry improvements
