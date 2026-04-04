@@ -16,6 +16,7 @@ import {
   Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { branding } from "@/lib/branding";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -78,11 +79,11 @@ export function Sidebar({ collapsed, onToggle, isMobile = false }: SidebarProps)
       <div className="flex items-center h-14 px-4 border-b border-border shrink-0">
         {!collapsed && (
           <span className="text-lg font-bold text-primary tracking-tight">
-            Medcurity CRM
+            {branding.fullTitle}
           </span>
         )}
         {collapsed && (
-          <span className="text-lg font-bold text-primary mx-auto">M</span>
+          <span className="text-lg font-bold text-primary mx-auto">{branding.shortName}</span>
         )}
       </div>
 
