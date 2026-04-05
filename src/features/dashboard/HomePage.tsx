@@ -27,6 +27,8 @@ import {
   History,
 } from "lucide-react";
 import { useRecentRecords, type RecentRecord } from "@/hooks/useRecentRecords";
+import { TeamActivityFeed } from "./TeamActivityFeed";
+import { MyAccountsWidget } from "./MyAccountsWidget";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -247,6 +249,57 @@ function useAdminMetrics() {
   });
 }
 
+function useAdminTeamStats(enabled: boolean) {
+  return useQuery({
+    queryKey: ["dashboard", "admin-team-stats"],
+    enabled,
+    queryFn: async () => {
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+      const { data: allOpen, error: oErr } = await supabase
+        .from("opportunities")
+        .select("amount")
+        .is("archived_at", null)
+        .not("stage", "in", '("closed_won","closed_lost")');
+      if (oErr) throw oErr;
+      const teamTotalPipeline = (allOpen ?? []).reduce(
+        (s, o) => s + Number(o.amount),
+        0,
+      );
+
+      const { count: activeAccounts, error: aErr } = await supabase
+        .from("accounts")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "active")
+        .is("archived_at", null);
+      if (aErr) throw aErr;
+
+      const { count: contactsThisMonth, error: cErr } = await supabase
+        .from("contacts")
+        .select("*", { count: "exact", head: true })
+        .is("archived_at", null)
+        .gte("created_at", monthStart.toISOString());
+      if (cErr) throw cErr;
+
+      const { count: closedWonMonth, error: cwErr } = await supabase
+        .from("opportunities")
+        .select("*", { count: "exact", head: true })
+        .eq("stage", "closed_won")
+        .is("archived_at", null)
+        .gte("close_date", monthStart.toISOString());
+      if (cwErr) throw cwErr;
+
+      return {
+        teamTotalPipeline,
+        activeAccounts: activeAccounts ?? 0,
+        contactsThisMonth: contactsThisMonth ?? 0,
+        closedWonMonth: closedWonMonth ?? 0,
+      };
+    },
+  });
+}
+
 function useMyOpenOpportunities(userId: string) {
   return useQuery({
     queryKey: ["dashboard", "my-open-opps", userId],
@@ -404,6 +457,40 @@ function buildAdminCards(metrics: {
       title: "Team Closed Won This Quarter",
       value: formatCurrency(metrics.teamClosedWon),
       icon: BarChart3,
+      accent: "text-amber-600",
+    },
+  ];
+}
+
+function buildAdminTeamCards(metrics: {
+  teamTotalPipeline: number;
+  activeAccounts: number;
+  contactsThisMonth: number;
+  closedWonMonth: number;
+}): MetricCard[] {
+  return [
+    {
+      title: "Team Total Pipeline",
+      value: formatCurrency(metrics.teamTotalPipeline),
+      icon: DollarSign,
+      accent: "text-emerald-600",
+    },
+    {
+      title: "Total Active Accounts",
+      value: metrics.activeAccounts,
+      icon: Building2,
+      accent: "text-blue-600",
+    },
+    {
+      title: "Contacts Added This Month",
+      value: metrics.contactsThisMonth,
+      icon: Users,
+      accent: "text-violet-600",
+    },
+    {
+      title: "Closed Won This Month",
+      value: metrics.closedWonMonth,
+      icon: Trophy,
       accent: "text-amber-600",
     },
   ];
@@ -805,6 +892,8 @@ const WIDGET_DEFS: WidgetDef[] = [
   { key: "upcoming_renewals", label: "Upcoming Renewals", defaultVisible: false },
   { key: "call_list", label: "Call List (from Sequences)", defaultVisible: false },
   { key: "saved_report", label: "Saved Report", defaultVisible: false },
+  { key: "team_activity_feed", label: "Team Activity Feed", defaultVisible: false },
+  { key: "my_accounts", label: "My Accounts", defaultVisible: false },
 ];
 
 function getDefaultConfig(): Record<string, boolean> {
@@ -1173,6 +1262,7 @@ export function HomePage() {
   const salesQuery = useSalesMetrics(userId);
   const renewalsQuery = useRenewalsMetrics(userId);
   const adminQuery = useAdminMetrics();
+  const adminTeamQuery = useAdminTeamStats(role === "admin");
 
   // Build role-dependent metric cards
   const roleCards: MetricCard[] = [];
@@ -1243,8 +1333,25 @@ export function HomePage() {
         /* Getting started empty state for new installs */
         <GettingStartedCard />
       ) : isWidgetVisible("kpis") ? (
-        /* KPI Metric Cards */
-        <MetricCardGrid cards={roleCards} loading={isMetricsLoading} />
+        <>
+          {/* KPI Metric Cards */}
+          <MetricCardGrid cards={roleCards} loading={isMetricsLoading} />
+          {role === "admin" && (
+            <div className="space-y-2">
+              <h2 className="text-sm font-medium text-muted-foreground">
+                Team Stats
+              </h2>
+              <MetricCardGrid
+                cards={
+                  adminTeamQuery.data
+                    ? buildAdminTeamCards(adminTeamQuery.data)
+                    : []
+                }
+                loading={adminTeamQuery.isLoading}
+              />
+            </div>
+          )}
+        </>
       ) : null}
 
       {/* Quick Actions */}
@@ -1274,6 +1381,11 @@ export function HomePage() {
       </div>
 
       {isWidgetVisible("call_list") && <CallListWidget />}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {isWidgetVisible("team_activity_feed") && <TeamActivityFeed />}
+        {isWidgetVisible("my_accounts") && <MyAccountsWidget userId={userId} />}
+      </div>
 
       {/* Customize sheet */}
       <DashboardCustomizeSheet
