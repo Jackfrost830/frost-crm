@@ -1,7 +1,7 @@
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { useRecentRecords } from "@/hooks/useRecentRecords";
-import { Pencil, Archive, ExternalLink, ChevronDown, Phone, Mail, UserRoundCog } from "lucide-react";
+import { Pencil, Archive, ChevronDown, Phone, Mail, UserRoundCog } from "lucide-react";
 import { useContact, useUpdateContact, useArchiveContact } from "./api";
 import { useCustomFieldDefinitions } from "@/hooks/useCustomFields";
 import { PageHeader } from "@/components/PageHeader";
@@ -9,6 +9,7 @@ import { CustomFieldsDisplay } from "@/components/CustomFieldsDisplay";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ChangeOwnerDialog } from "@/components/ChangeOwnerDialog";
 import { RecordId } from "@/components/RecordId";
+import { InlineEdit, type InlineEditProps } from "@/components/InlineEdit";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -68,6 +69,25 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+function EditableField({
+  label,
+  value,
+  onSave,
+  type,
+}: {
+  label: string;
+  value: unknown;
+  onSave: (newValue: string) => Promise<void>;
+  type?: InlineEditProps["type"];
+}) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <InlineEdit value={value as string | number | null} onSave={onSave} type={type} />
+    </div>
+  );
+}
+
 /* ---------- Main component ---------- */
 
 export function ContactDetail() {
@@ -101,6 +121,11 @@ export function ContactDetail() {
   if (!contact) {
     return <div className="text-muted-foreground">Contact not found.</div>;
   }
+
+  const contactId = contact.id;
+  const saveField = (field: string) => async (newValue: string) => {
+    await updateMutation.mutateAsync({ id: contactId, [field]: newValue === "" ? null : newValue } as Parameters<typeof updateMutation.mutateAsync>[0]);
+  };
 
   function handleArchive() {
     if (!id) return;
@@ -239,35 +264,11 @@ export function ContactDetail() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
           <Field label="First Name" value={contact.first_name} />
           <Field label="Last Name" value={contact.last_name} />
-          <Field
-            label="Email"
-            value={
-              contact.email ? (
-                <a href={`mailto:${contact.email}`} className="text-primary hover:underline">
-                  {contact.email}
-                </a>
-              ) : null
-            }
-          />
-          <Field label="Phone" value={contact.phone} />
-          <Field label="Title" value={contact.title} />
-          <Field label="Department" value={contact.department} />
-          <Field
-            label="LinkedIn URL"
-            value={
-              contact.linkedin_url ? (
-                <a
-                  href={contact.linkedin_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline inline-flex items-center gap-1"
-                >
-                  {contact.linkedin_url.replace(/^https?:\/\/(www\.)?/, "")}
-                  <ExternalLink className="h-3 w-3 shrink-0" />
-                </a>
-              ) : null
-            }
-          />
+          <EditableField label="Email" value={contact.email} onSave={saveField("email")} />
+          <EditableField label="Phone" value={contact.phone} onSave={saveField("phone")} />
+          <EditableField label="Title" value={contact.title} onSave={saveField("title")} />
+          <EditableField label="Department" value={contact.department} onSave={saveField("department")} />
+          <EditableField label="LinkedIn URL" value={contact.linkedin_url} onSave={saveField("linkedin_url")} />
           <Field
             label="Do Not Contact"
             value={contact.do_not_contact ? "\u2713" : "\u2717"}

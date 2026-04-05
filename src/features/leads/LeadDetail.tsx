@@ -1,7 +1,7 @@
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { useRecentRecords } from "@/hooks/useRecentRecords";
-import { Pencil, Archive, ExternalLink, ChevronDown, Phone, Mail, ArrowRightLeft, UserRoundCog } from "lucide-react";
+import { Pencil, Archive, ChevronDown, Phone, Mail, ArrowRightLeft, UserRoundCog } from "lucide-react";
 import { useLead, useUpdateLead, useArchiveLead } from "./api";
 import { useCustomFieldDefinitions } from "@/hooks/useCustomFields";
 import { PageHeader } from "@/components/PageHeader";
@@ -10,6 +10,7 @@ import { CustomFieldsDisplay } from "@/components/CustomFieldsDisplay";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ChangeOwnerDialog } from "@/components/ChangeOwnerDialog";
 import { RecordId } from "@/components/RecordId";
+import { InlineEdit, type InlineEditProps } from "@/components/InlineEdit";
 import { ConvertLeadDialog } from "./ConvertLeadDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -78,6 +79,25 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+function EditableField({
+  label,
+  value,
+  onSave,
+  type,
+}: {
+  label: string;
+  value: unknown;
+  onSave: (newValue: string) => Promise<void>;
+  type?: InlineEditProps["type"];
+}) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <InlineEdit value={value as string | number | null} onSave={onSave} type={type} />
+    </div>
+  );
+}
+
 /* ---------- Main component ---------- */
 
 export function LeadDetail() {
@@ -112,6 +132,11 @@ export function LeadDetail() {
   if (!lead) {
     return <div className="text-muted-foreground">Lead not found.</div>;
   }
+
+  const leadId = lead.id;
+  const saveField = (field: string) => async (newValue: string) => {
+    await updateMutation.mutateAsync({ id: leadId, [field]: newValue === "" ? null : newValue } as Parameters<typeof updateMutation.mutateAsync>[0]);
+  };
 
   function handleArchive() {
     if (!id) return;
@@ -318,35 +343,11 @@ export function LeadDetail() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
           <Field label="First Name" value={lead.first_name} />
           <Field label="Last Name" value={lead.last_name} />
-          <Field
-            label="Email"
-            value={
-              lead.email ? (
-                <a href={`mailto:${lead.email}`} className="text-primary hover:underline">
-                  {lead.email}
-                </a>
-              ) : null
-            }
-          />
-          <Field label="Phone" value={lead.phone} />
-          <Field label="Title" value={lead.title} />
-          <Field label="Industry" value={lead.industry} />
-          <Field
-            label="Website"
-            value={
-              lead.website ? (
-                <a
-                  href={lead.website}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline inline-flex items-center gap-1"
-                >
-                  {lead.website.replace(/^https?:\/\//, "")}
-                  <ExternalLink className="h-3 w-3 shrink-0" />
-                </a>
-              ) : null
-            }
-          />
+          <EditableField label="Email" value={lead.email} onSave={saveField("email")} />
+          <EditableField label="Phone" value={lead.phone} onSave={saveField("phone")} />
+          <EditableField label="Title" value={lead.title} onSave={saveField("title")} />
+          <EditableField label="Industry" value={lead.industry} onSave={saveField("industry")} />
+          <EditableField label="Website" value={lead.website} onSave={saveField("website")} />
           {lead.description && (
             <div className="md:col-span-2">
               <Field label="Description" value={lead.description} />
@@ -358,7 +359,7 @@ export function LeadDetail() {
       {/* --------- Company Info Section --------- */}
       <CollapsibleSection title="Company Info">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
-          <Field label="Company" value={lead.company} />
+          <EditableField label="Company" value={lead.company} onSave={saveField("company")} />
           <Field
             label="Employees"
             value={lead.employees != null ? lead.employees.toLocaleString() : null}

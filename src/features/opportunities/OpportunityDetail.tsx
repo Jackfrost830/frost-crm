@@ -12,6 +12,7 @@ import { CustomFieldsDisplay } from "@/components/CustomFieldsDisplay";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ChangeOwnerDialog } from "@/components/ChangeOwnerDialog";
 import { RecordId } from "@/components/RecordId";
+import { InlineEdit, type InlineEditProps } from "@/components/InlineEdit";
 import { AccountContacts } from "@/features/accounts/AccountContacts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -86,6 +87,25 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+function EditableField({
+  label,
+  value,
+  onSave,
+  type,
+}: {
+  label: string;
+  value: unknown;
+  onSave: (newValue: string) => Promise<void>;
+  type?: InlineEditProps["type"];
+}) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <InlineEdit value={value as string | number | null} onSave={onSave} type={type} />
+    </div>
+  );
+}
+
 /* ---------- Main component ---------- */
 
 export function OpportunityDetail() {
@@ -125,6 +145,13 @@ export function OpportunityDetail() {
   if (!opp) {
     return <div className="text-muted-foreground">Opportunity not found.</div>;
   }
+
+  const oppId = opp.id;
+  const saveField = (field: string, parser: (v: string) => unknown = (v) => (v === "" ? null : v)) =>
+    async (newValue: string) => {
+      await updateMutation.mutateAsync({ id: oppId, [field]: parser(newValue) } as Parameters<typeof updateMutation.mutateAsync>[0]);
+    };
+  const parseNumber = (v: string) => (v === "" ? null : Number(v));
 
   function handleArchive() {
     if (!id) return;
@@ -268,9 +295,11 @@ export function OpportunityDetail() {
           />
           <Field label="Type / Kind" value={kindLabel(opp.kind)} />
           <Field label="Stage" value={stageLabel(opp.stage)} />
-          <Field
+          <EditableField
             label="Probability (%)"
-            value={opp.probability != null ? `${opp.probability}%` : null}
+            value={opp.probability}
+            onSave={saveField("probability", parseNumber)}
+            type="number"
           />
           <Field label="Start Date" value={formatDate(opp.contract_start_date)} />
           <Field label="Maturity Date" value={formatDate(opp.contract_end_date)} />
@@ -300,7 +329,12 @@ export function OpportunityDetail() {
             label="Discount"
             value={opp.discount != null ? formatCurrencyDetailed(opp.discount) : null}
           />
-          <Field label="Amount" value={formatCurrency(opp.amount)} />
+          <EditableField
+            label="Amount"
+            value={opp.amount}
+            onSave={saveField("amount", (v) => (v === "" ? 0 : Number(v)))}
+            type="currency"
+          />
           <Field label="FTE Range" value={opp.account?.fte_range} />
           <Field
             label="FTEs"
@@ -325,7 +359,7 @@ export function OpportunityDetail() {
             label="Follow Up"
             value={opp.follow_up ? "\u2713 Yes" : "\u2717 No"}
           />
-          <Field label="Next Step" value={opp.next_step} />
+          <EditableField label="Next Step" value={opp.next_step} onSave={saveField("next_step")} />
           <Field
             label="Service Amount"
             value={opp.service_amount != null ? formatCurrencyDetailed(opp.service_amount) : null}
@@ -338,7 +372,12 @@ export function OpportunityDetail() {
             label="Services Included"
             value={opp.services_included ? "\u2713 Yes" : "\u2717 No"}
           />
-          <Field label="Expected Close Date" value={formatDate(opp.expected_close_date)} />
+          <EditableField
+            label="Expected Close Date"
+            value={opp.expected_close_date}
+            onSave={saveField("expected_close_date")}
+            type="date"
+          />
         </div>
         {opp.description && (
           <div className="mt-3">
@@ -349,11 +388,14 @@ export function OpportunityDetail() {
       </CollapsibleSection>
 
       {/* --------- Notes --------- */}
-      {opp.notes && (
-        <CollapsibleSection title="Notes">
-          <p className="text-sm whitespace-pre-wrap">{opp.notes}</p>
-        </CollapsibleSection>
-      )}
+      <CollapsibleSection title="Notes" defaultOpen={!!opp.notes}>
+        <InlineEdit
+          value={opp.notes}
+          onSave={saveField("notes")}
+          type="textarea"
+          placeholder="Add notes..."
+        />
+      </CollapsibleSection>
 
       {/* --------- Custom Fields --------- */}
       {customFieldDefs && customFieldDefs.length > 0 && opp.custom_fields && (
