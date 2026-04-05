@@ -184,11 +184,17 @@ supabase/
 | `/leads/:id/edit` | LeadForm | Yes | Edit lead |
 | `/sequences` | SequencesPage | Yes | Sales sequences / cadences |
 | `/lead-lists` | LeadListsPage | Yes | Targeted lead lists |
+| `/products` | ProductsPage | Yes | Products catalog + price book manager |
+| `/email-templates` | EmailTemplatesPage | Yes | Email template library with variables |
 | `/opportunities` | OpportunitiesList | Yes | Filterable opportunities table |
 | `/opportunities/new` | OpportunityForm | Yes | Create opportunity |
 | `/opportunities/:id` | OpportunityDetail | Yes | Full opp detail + products/history |
 | `/opportunities/:id/edit` | OpportunityForm | Yes | Edit opportunity |
 | `/pipeline` | PipelineBoard | Yes | Multi-pipeline kanban with custom views |
+| `/forecasting` | ForecastPage | Yes | Quarter-based revenue forecasting |
+| `/calendar` | ActivityCalendar | Yes | Monthly activity calendar grid |
+| `/activities` | ActivitiesListPage | Yes | Global activities list with filters |
+| `/analytics` | WinLossAnalysis | Yes | Win/Loss analytics + sales velocity |
 | `/renewals` | RenewalsQueue | Yes | Upcoming renewals by urgency |
 | `/reports` | ReportBuilder | Yes | Dashboard + interactive report builder |
 | `/archive` | ArchiveManager | Admin | Restore archived records |
@@ -311,6 +317,43 @@ supabase/
 - Shared `Pagination` component displays "Showing X-Y of Z" with Previous/Next buttons
 
 ## Features Implemented
+
+### Inline Field Editing
+- Click any value on detail pages to edit in place
+- Enter saves, Escape cancels, blur saves
+- Supports text, number, currency, date, textarea
+- Wired to Account, Opportunity, Contact, Lead detail pages (20+ fields)
+
+### Email Templates (`/email-templates`)
+- Create/edit/delete templates with variables (`{{first_name}}`, `{{company}}`, etc.)
+- Category organization, shared templates
+- Usage counter per template
+- Integrated with LogEmailDialog for quick insertion
+
+### Notifications Center
+- Bell icon in top bar with unread count badge
+- Popover shows last 10 notifications
+- Click to navigate + auto-mark-read
+- Auto-refetches every 60s
+
+### Team Activity Feed + My Accounts Widgets
+- Optional dashboard widgets on home page
+- **TeamActivityFeed**: last 15 activities across team
+- **MyAccountsWidget**: user's top 10 accounts by ACV
+
+### Admin Team Stats
+- Extra KPI row on home dashboard for admins only
+- Team Total Pipeline, Active Accounts, Contacts This Month, Closed Won This Month
+
+### Quick Notes
+- QuickNoteInput on ActivityTimeline
+- Ctrl+Enter to save
+- First line becomes subject, rest is body
+
+### Recent Records
+- `useRecentRecords` hook tracks last 10 viewed records in localStorage
+- Available as dashboard widget
+- Tracks visits on all detail pages
 
 ### Forecasting
 - Quarter-based revenue forecasting at `/forecasting`
@@ -723,10 +766,13 @@ The system supports both manual email logging (Log Email dialog) and automated O
 ## What's Next
 
 - [ ] OAuth Gmail/Outlook email sync deployment
-- [ ] PandaDoc integration deployment
-- [ ] Email campaign tracking + open/click analytics
+- [ ] PandaDoc API integration deployment
+- [ ] Email open/click analytics
 - [ ] AI-powered lead scoring
-- [ ] Email template library
-- [ ] Workflow designer visual editor
-- [ ] Forecasting views
-- [ ] Custom dashboard widget creation
+- [ ] Advanced forecasting (historical trends, AI predictions)
+- [ ] Account hierarchy (parent/child companies)
+- [ ] Territory management
+- [ ] Campaign tracking
+- [ ] File attachments on records
+- [ ] Commission calculator
+- [ ] Mobile app (PWA)
