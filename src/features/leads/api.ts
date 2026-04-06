@@ -53,7 +53,7 @@ export function useLead(id: string | undefined) {
       if (!id) throw new Error("Missing lead ID");
       const { data, error } = await supabase
         .from("leads")
-        .select("*, owner:user_profiles!owner_user_id(id, full_name)")
+        .select("*, owner:user_profiles!owner_user_id(id, full_name), creator:user_profiles!created_by(id, full_name), updater:user_profiles!updated_by(id, full_name)")
         .eq("id", id)
         .single();
       if (error) throw error;

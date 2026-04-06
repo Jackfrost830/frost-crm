@@ -2,15 +2,8 @@ import { useState, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  DollarSign,
-  TrendingUp,
-  Trophy,
-  CalendarClock,
-  RefreshCw,
-  AlertTriangle,
   Building2,
   Users,
-  BarChart3,
   Plus,
   Target,
   Kanban,
@@ -22,6 +15,7 @@ import {
   UserPlus,
   Sparkles,
   Settings,
+  Settings2,
   GripVertical,
   Phone,
   History,
@@ -29,6 +23,9 @@ import {
 import { useRecentRecords, type RecentRecord } from "@/hooks/useRecentRecords";
 import { TeamActivityFeed } from "./TeamActivityFeed";
 import { MyAccountsWidget } from "./MyAccountsWidget";
+import { KpiCard } from "./KpiCard";
+import { KpiConfigDialog } from "./KpiConfigDialog";
+import { loadKpiConfig, getKpiById } from "./kpi-registry";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -66,13 +63,6 @@ import type { AppRole, OpportunityStage, ActivityType } from "@/types/crm";
 // Types for query results
 // ---------------------------------------------------------------------------
 
-interface MetricCard {
-  title: string;
-  value: string | number;
-  icon: React.ElementType;
-  accent?: string;
-}
-
 interface OpenOpportunity {
   id: string;
   name: string;
@@ -100,205 +90,6 @@ interface TaskItem {
 // ---------------------------------------------------------------------------
 // Data hooks
 // ---------------------------------------------------------------------------
-
-function useSalesMetrics(userId: string) {
-  return useQuery({
-    queryKey: ["dashboard", "sales-metrics", userId],
-    queryFn: async () => {
-      // My open pipeline + deals in progress
-      const { data: openOpps, error: openErr } = await supabase
-        .from("opportunities")
-        .select("amount, stage, expected_close_date")
-        .eq("owner_user_id", userId)
-        .is("archived_at", null)
-        .not("stage", "in", '("closed_won","closed_lost")');
-      if (openErr) throw openErr;
-
-      const myOpenPipeline = (openOpps ?? []).reduce(
-        (sum, o) => sum + Number(o.amount),
-        0,
-      );
-      const myDealsInProgress = openOpps?.length ?? 0;
-
-      // Upcoming close dates (next 30 days)
-      const now = new Date();
-      const thirtyDaysOut = new Date(now);
-      thirtyDaysOut.setDate(thirtyDaysOut.getDate() + 30);
-      const upcomingClose = (openOpps ?? []).filter((o) => {
-        if (!o.expected_close_date) return false;
-        const d = new Date(o.expected_close_date);
-        return d >= now && d <= thirtyDaysOut;
-      }).length;
-
-      // Closed won this quarter
-      const quarterStart = getQuarterStart(now);
-      const { count: closedWonCount, error: cwErr } = await supabase
-        .from("opportunities")
-        .select("*", { count: "exact", head: true })
-        .eq("owner_user_id", userId)
-        .eq("stage", "closed_won")
-        .is("archived_at", null)
-        .gte("close_date", quarterStart.toISOString());
-      if (cwErr) throw cwErr;
-
-      return {
-        myOpenPipeline,
-        myDealsInProgress,
-        closedWonThisQuarter: closedWonCount ?? 0,
-        upcomingCloseDates: upcomingClose,
-      };
-    },
-  });
-}
-
-function useRenewalsMetrics(userId: string) {
-  return useQuery({
-    queryKey: ["dashboard", "renewals-metrics", userId],
-    queryFn: async () => {
-      const { data: queue, error: qErr } = await supabase
-        .from("renewal_queue")
-        .select("days_until_renewal, current_arr");
-      if (qErr) throw qErr;
-
-      const rows = queue ?? [];
-      const due30 = rows.filter(
-        (r) => r.days_until_renewal !== null && r.days_until_renewal <= 30,
-      ).length;
-      const due60 = rows.filter(
-        (r) => r.days_until_renewal !== null && r.days_until_renewal <= 60,
-      ).length;
-      const totalARR = rows.reduce(
-        (sum, r) => sum + Number(r.current_arr),
-        0,
-      );
-
-      // My renewal-kind opportunities in progress
-      const { count: myRenewals, error: rErr } = await supabase
-        .from("opportunities")
-        .select("*", { count: "exact", head: true })
-        .eq("owner_user_id", userId)
-        .eq("kind", "renewal")
-        .is("archived_at", null)
-        .not("stage", "in", '("closed_won","closed_lost")');
-      if (rErr) throw rErr;
-
-      return {
-        renewalsDue30: due30,
-        renewalsDue60: due60,
-        totalARRAtRisk: totalARR,
-        myRenewalsInProgress: myRenewals ?? 0,
-      };
-    },
-  });
-}
-
-function useAdminMetrics() {
-  return useQuery({
-    queryKey: ["dashboard", "admin-metrics"],
-    queryFn: async () => {
-      // Total open pipeline (all users)
-      const { data: allOpen, error: oErr } = await supabase
-        .from("opportunities")
-        .select("amount")
-        .is("archived_at", null)
-        .not("stage", "in", '("closed_won","closed_lost")');
-      if (oErr) throw oErr;
-
-      const totalOpenPipeline = (allOpen ?? []).reduce(
-        (sum, o) => sum + Number(o.amount),
-        0,
-      );
-
-      // Active accounts
-      const { count: totalAccounts, error: aErr } = await supabase
-        .from("accounts")
-        .select("*", { count: "exact", head: true })
-        .is("archived_at", null);
-      if (aErr) throw aErr;
-
-      // Total contacts
-      const { count: totalContacts, error: cErr } = await supabase
-        .from("contacts")
-        .select("*", { count: "exact", head: true })
-        .is("archived_at", null);
-      if (cErr) throw cErr;
-
-      // Team performance: closed won this quarter by team
-      const now = new Date();
-      const quarterStart = getQuarterStart(now);
-      const { data: teamPerf, error: tErr } = await supabase
-        .from("opportunities")
-        .select("team, amount")
-        .eq("stage", "closed_won")
-        .is("archived_at", null)
-        .gte("close_date", quarterStart.toISOString());
-      if (tErr) throw tErr;
-
-      const teamWon = (teamPerf ?? []).reduce(
-        (sum, o) => sum + Number(o.amount),
-        0,
-      );
-
-      return {
-        totalOpenPipeline,
-        totalAccounts: totalAccounts ?? 0,
-        totalContacts: totalContacts ?? 0,
-        teamClosedWon: teamWon,
-      };
-    },
-  });
-}
-
-function useAdminTeamStats(enabled: boolean) {
-  return useQuery({
-    queryKey: ["dashboard", "admin-team-stats"],
-    enabled,
-    queryFn: async () => {
-      const now = new Date();
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-
-      const { data: allOpen, error: oErr } = await supabase
-        .from("opportunities")
-        .select("amount")
-        .is("archived_at", null)
-        .not("stage", "in", '("closed_won","closed_lost")');
-      if (oErr) throw oErr;
-      const teamTotalPipeline = (allOpen ?? []).reduce(
-        (s, o) => s + Number(o.amount),
-        0,
-      );
-
-      const { count: activeAccounts, error: aErr } = await supabase
-        .from("accounts")
-        .select("*", { count: "exact", head: true })
-        .eq("status", "active")
-        .is("archived_at", null);
-      if (aErr) throw aErr;
-
-      const { count: contactsThisMonth, error: cErr } = await supabase
-        .from("contacts")
-        .select("*", { count: "exact", head: true })
-        .is("archived_at", null)
-        .gte("created_at", monthStart.toISOString());
-      if (cErr) throw cErr;
-
-      const { count: closedWonMonth, error: cwErr } = await supabase
-        .from("opportunities")
-        .select("*", { count: "exact", head: true })
-        .eq("stage", "closed_won")
-        .is("archived_at", null)
-        .gte("close_date", monthStart.toISOString());
-      if (cwErr) throw cwErr;
-
-      return {
-        teamTotalPipeline,
-        activeAccounts: activeAccounts ?? 0,
-        contactsThisMonth: contactsThisMonth ?? 0,
-        closedWonMonth: closedWonMonth ?? 0,
-      };
-    },
-  });
-}
 
 function useMyOpenOpportunities(userId: string) {
   return useQuery({
@@ -351,197 +142,8 @@ function useMyTasks(userId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function getQuarterStart(date: Date): Date {
-  const month = date.getMonth();
-  const quarterStartMonth = month - (month % 3);
-  return new Date(date.getFullYear(), quarterStartMonth, 1);
-}
-
-function buildSalesCards(metrics: {
-  myOpenPipeline: number;
-  myDealsInProgress: number;
-  closedWonThisQuarter: number;
-  upcomingCloseDates: number;
-}): MetricCard[] {
-  return [
-    {
-      title: "My Open Pipeline",
-      value: formatCurrency(metrics.myOpenPipeline),
-      icon: DollarSign,
-      accent: "text-emerald-600",
-    },
-    {
-      title: "My Deals in Progress",
-      value: metrics.myDealsInProgress,
-      icon: TrendingUp,
-      accent: "text-blue-600",
-    },
-    {
-      title: "Closed Won This Quarter",
-      value: metrics.closedWonThisQuarter,
-      icon: Trophy,
-      accent: "text-amber-600",
-    },
-    {
-      title: "Upcoming Close Dates",
-      value: metrics.upcomingCloseDates,
-      icon: CalendarClock,
-      accent: "text-violet-600",
-    },
-  ];
-}
-
-function buildRenewalsCards(metrics: {
-  renewalsDue30: number;
-  renewalsDue60: number;
-  totalARRAtRisk: number;
-  myRenewalsInProgress: number;
-}): MetricCard[] {
-  return [
-    {
-      title: "Renewals Due in 30 Days",
-      value: metrics.renewalsDue30,
-      icon: RefreshCw,
-      accent: "text-red-600",
-    },
-    {
-      title: "Renewals Due in 60 Days",
-      value: metrics.renewalsDue60,
-      icon: CalendarClock,
-      accent: "text-amber-600",
-    },
-    {
-      title: "Total ARR at Risk",
-      value: formatCurrency(metrics.totalARRAtRisk),
-      icon: AlertTriangle,
-      accent: "text-red-600",
-    },
-    {
-      title: "My Renewals in Progress",
-      value: metrics.myRenewalsInProgress,
-      icon: RefreshCw,
-      accent: "text-teal-600",
-    },
-  ];
-}
-
-function buildAdminCards(metrics: {
-  totalOpenPipeline: number;
-  totalAccounts: number;
-  totalContacts: number;
-  teamClosedWon: number;
-}): MetricCard[] {
-  return [
-    {
-      title: "Total Open Pipeline",
-      value: formatCurrency(metrics.totalOpenPipeline),
-      icon: DollarSign,
-      accent: "text-emerald-600",
-    },
-    {
-      title: "Total Active Accounts",
-      value: metrics.totalAccounts,
-      icon: Building2,
-      accent: "text-blue-600",
-    },
-    {
-      title: "Total Contacts",
-      value: metrics.totalContacts,
-      icon: Users,
-      accent: "text-violet-600",
-    },
-    {
-      title: "Team Closed Won This Quarter",
-      value: formatCurrency(metrics.teamClosedWon),
-      icon: BarChart3,
-      accent: "text-amber-600",
-    },
-  ];
-}
-
-function buildAdminTeamCards(metrics: {
-  teamTotalPipeline: number;
-  activeAccounts: number;
-  contactsThisMonth: number;
-  closedWonMonth: number;
-}): MetricCard[] {
-  return [
-    {
-      title: "Team Total Pipeline",
-      value: formatCurrency(metrics.teamTotalPipeline),
-      icon: DollarSign,
-      accent: "text-emerald-600",
-    },
-    {
-      title: "Total Active Accounts",
-      value: metrics.activeAccounts,
-      icon: Building2,
-      accent: "text-blue-600",
-    },
-    {
-      title: "Contacts Added This Month",
-      value: metrics.contactsThisMonth,
-      icon: Users,
-      accent: "text-violet-600",
-    },
-    {
-      title: "Closed Won This Month",
-      value: metrics.closedWonMonth,
-      icon: Trophy,
-      accent: "text-amber-600",
-    },
-  ];
-}
-
-// ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
-
-function MetricCardGrid({
-  cards,
-  loading,
-}: {
-  cards: MetricCard[];
-  loading: boolean;
-}) {
-  if (loading) {
-    return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Card key={i}>
-            <CardHeader className="pb-2">
-              <Skeleton className="h-4 w-32" />
-            </CardHeader>
-            <CardContent>
-              <Skeleton className="h-8 w-24" />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-      {cards.map((card) => (
-        <Card key={card.title}>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm text-muted-foreground font-medium">
-              {card.title}
-            </CardTitle>
-            <card.icon className={`h-4 w-4 ${card.accent ?? "text-muted-foreground"}`} />
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{card.value}</p>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
-}
 
 function QuickActions() {
   const navigate = useNavigate();
@@ -1253,59 +855,25 @@ export function HomePage() {
     loadDashboardConfig
   );
   const [showCustomize, setShowCustomize] = useState(false);
+  const [showKpiConfig, setShowKpiConfig] = useState(false);
+  const [selectedKpis, setSelectedKpis] = useState<string[]>(() =>
+    loadKpiConfig(role),
+  );
 
   const isWidgetVisible = useCallback(
     (key: string) => dashboardConfig[key] ?? false,
     [dashboardConfig]
   );
 
-  const salesQuery = useSalesMetrics(userId);
-  const renewalsQuery = useRenewalsMetrics(userId);
-  const adminQuery = useAdminMetrics();
-  const adminTeamQuery = useAdminTeamStats(role === "admin");
-
-  // Build role-dependent metric cards
-  const roleCards: MetricCard[] = [];
-  let isMetricsLoading = false;
-
-  if (role === "sales") {
-    isMetricsLoading = salesQuery.isLoading;
-    if (salesQuery.data) {
-      roleCards.push(...buildSalesCards(salesQuery.data));
-    }
-  } else if (role === "renewals") {
-    isMetricsLoading = renewalsQuery.isLoading;
-    if (renewalsQuery.data) {
-      roleCards.push(...buildRenewalsCards(renewalsQuery.data));
-    }
-  } else if (role === "admin") {
-    isMetricsLoading =
-      salesQuery.isLoading ||
-      renewalsQuery.isLoading ||
-      adminQuery.isLoading;
-    if (salesQuery.data) {
-      roleCards.push(...buildSalesCards(salesQuery.data));
-    }
-    if (renewalsQuery.data) {
-      roleCards.push(...buildRenewalsCards(renewalsQuery.data));
-    }
-    if (adminQuery.data) {
-      roleCards.push(...buildAdminCards(adminQuery.data));
-    }
-  }
+  // Resolve KPI definitions for selected IDs
+  const activeKpis = selectedKpis
+    .map((id) => getKpiById(id))
+    .filter((k) => k !== undefined);
 
   const greeting = getGreeting();
 
-  // Determine if all metrics are zero (new/empty install)
-  const allMetricsZero =
-    !isMetricsLoading &&
-    roleCards.length > 0 &&
-    roleCards.every((card) => {
-      const v = card.value;
-      if (typeof v === "number") return v === 0;
-      if (typeof v === "string") return v === "$0" || v === "$0.00" || v === "0";
-      return false;
-    });
+  // If no KPIs have been loaded yet show getting-started for brand new installs
+  const showGettingStarted = activeKpis.length === 0;
 
   return (
     <div className="space-y-6">
@@ -1329,30 +897,42 @@ export function HomePage() {
         </Button>
       </div>
 
-      {allMetricsZero ? (
-        /* Getting started empty state for new installs */
+      {showGettingStarted ? (
         <GettingStartedCard />
       ) : isWidgetVisible("kpis") ? (
         <>
-          {/* KPI Metric Cards */}
-          <MetricCardGrid cards={roleCards} loading={isMetricsLoading} />
-          {role === "admin" && (
-            <div className="space-y-2">
-              <h2 className="text-sm font-medium text-muted-foreground">
-                Team Stats
-              </h2>
-              <MetricCardGrid
-                cards={
-                  adminTeamQuery.data
-                    ? buildAdminTeamCards(adminTeamQuery.data)
-                    : []
-                }
-                loading={adminTeamQuery.isLoading}
-              />
-            </div>
-          )}
+          {/* KPI Section Header */}
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium text-muted-foreground">
+              Key Metrics
+            </h2>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowKpiConfig(true)}
+            >
+              <Settings2 className="h-4 w-4 mr-1" />
+              Configure
+            </Button>
+          </div>
+
+          {/* Configurable KPI Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {activeKpis.map((kpi) => (
+              <KpiCard key={kpi.id} kpi={kpi} userId={userId} />
+            ))}
+          </div>
         </>
       ) : null}
+
+      {/* KPI Config Dialog */}
+      <KpiConfigDialog
+        open={showKpiConfig}
+        onOpenChange={setShowKpiConfig}
+        role={role}
+        selectedKpis={selectedKpis}
+        onSave={setSelectedKpis}
+      />
 
       {/* Quick Actions */}
       <div>

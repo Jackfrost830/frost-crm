@@ -71,10 +71,14 @@ export interface Account {
   archived_at: string | null;
   archived_by: string | null;
   archive_reason: string | null;
+  created_by: string | null;
+  updated_by: string | null;
   created_at: string;
   updated_at: string;
   // joined fields
   owner?: UserProfile;
+  creator?: UserProfile;
+  updater?: UserProfile;
 }
 
 export interface Contact {
@@ -102,11 +106,15 @@ export interface Contact {
   archived_at: string | null;
   archived_by: string | null;
   archive_reason: string | null;
+  created_by: string | null;
+  updated_by: string | null;
   created_at: string;
   updated_at: string;
   // joined fields
   owner?: UserProfile;
   account?: Account;
+  creator?: UserProfile;
+  updater?: UserProfile;
 }
 
 export interface Product {
@@ -164,12 +172,16 @@ export interface Opportunity {
   archived_at: string | null;
   archived_by: string | null;
   archive_reason: string | null;
+  created_by: string | null;
+  updated_by: string | null;
   created_at: string;
   updated_at: string;
   // joined fields
   owner?: UserProfile;
   account?: Account;
   primary_contact?: Contact;
+  creator?: UserProfile;
+  updater?: UserProfile;
 }
 
 export interface Lead {
@@ -206,10 +218,14 @@ export interface Lead {
   archived_at: string | null;
   archived_by: string | null;
   archive_reason: string | null;
+  created_by: string | null;
+  updated_by: string | null;
   created_at: string;
   updated_at: string;
   // joined fields
   owner?: UserProfile;
+  creator?: UserProfile;
+  updater?: UserProfile;
 }
 
 export interface CustomFieldDefinition {

@@ -22,6 +22,7 @@ import {
   qualificationLabel,
   formatCurrency,
   formatDate,
+  formatDateTime,
 } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -441,6 +442,22 @@ export function LeadDetail() {
           </div>
         </CollapsibleSection>
       )}
+
+      {/* --------- System Information --------- */}
+      <CollapsibleSection title="System Information" defaultOpen={false}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
+          <Field
+            label="Created By"
+            value={lead.creator?.full_name ?? "\u2014"}
+          />
+          <Field
+            label="Last Modified By"
+            value={lead.updater?.full_name ?? "\u2014"}
+          />
+          <Field label="Created" value={formatDateTime(lead.created_at)} />
+          <Field label="Last Modified" value={formatDateTime(lead.updated_at)} />
+        </div>
+      </CollapsibleSection>
 
       {/* --------- Tabs --------- */}
       <Tabs defaultValue="activities" className="mt-2">

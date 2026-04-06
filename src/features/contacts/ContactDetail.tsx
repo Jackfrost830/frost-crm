@@ -15,7 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatName, leadSourceLabel } from "@/lib/formatters";
+import { formatName, formatDateTime, leadSourceLabel } from "@/lib/formatters";
 import { StatusBadge } from "@/components/StatusBadge";
 import type { LeadSource } from "@/types/crm";
 import { cn } from "@/lib/utils";
@@ -310,6 +310,22 @@ export function ContactDetail() {
           />
         </CollapsibleSection>
       )}
+
+      {/* --------- System Information --------- */}
+      <CollapsibleSection title="System Information" defaultOpen={false}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
+          <Field
+            label="Created By"
+            value={contact.creator?.full_name ?? "\u2014"}
+          />
+          <Field
+            label="Last Modified By"
+            value={contact.updater?.full_name ?? "\u2014"}
+          />
+          <Field label="Created" value={formatDateTime(contact.created_at)} />
+          <Field label="Last Modified" value={formatDateTime(contact.updated_at)} />
+        </div>
+      </CollapsibleSection>
 
       {/* --------- Tabs --------- */}
       <Tabs defaultValue="opportunities" className="mt-2">

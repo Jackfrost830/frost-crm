@@ -24,6 +24,11 @@ export function formatDate(dateString: string | null): string {
   return format(parseISO(dateString), "MMM d, yyyy");
 }
 
+export function formatDateTime(dateString: string | null): string {
+  if (!dateString) return "—";
+  return format(parseISO(dateString), "MMM d, yyyy h:mm a");
+}
+
 export function formatRelativeDate(dateString: string | null): string {
   if (!dateString) return "—";
   return formatDistanceToNow(parseISO(dateString), { addSuffix: true });

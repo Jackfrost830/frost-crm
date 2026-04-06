@@ -42,7 +42,7 @@ export function useContact(id: string | undefined) {
       if (!id) throw new Error("Missing contact ID");
       const { data, error } = await supabase
         .from("contacts")
-        .select("*, account:accounts!account_id(id, name), owner:user_profiles!owner_user_id(id, full_name)")
+        .select("*, account:accounts!account_id(id, name), owner:user_profiles!owner_user_id(id, full_name), creator:user_profiles!created_by(id, full_name), updater:user_profiles!updated_by(id, full_name)")
         .eq("id", id)
         .single();
       if (error) throw error;

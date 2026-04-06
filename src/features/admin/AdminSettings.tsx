@@ -12,6 +12,7 @@ import { SalesforceImport } from "./SalesforceImport";
 import { AuditLogViewer } from "./AuditLogViewer";
 import { AutomationsManager } from "./AutomationsManager";
 import { SystemInfo } from "./SystemInfo";
+import { DataHealthDashboard } from "./DataHealthDashboard";
 import { Loader2 } from "lucide-react";
 
 export function AdminSettings() {
@@ -56,6 +57,7 @@ export function AdminSettings() {
           <TabsTrigger value="automations">Automations</TabsTrigger>
           <TabsTrigger value="data-import">Data Import</TabsTrigger>
           <TabsTrigger value="audit-log">Audit Log</TabsTrigger>
+          <TabsTrigger value="data-health">Data Health</TabsTrigger>
           <TabsTrigger value="system">System</TabsTrigger>
         </TabsList>
 
@@ -131,6 +133,18 @@ export function AdminSettings() {
               </p>
             </div>
             <AuditLogViewer />
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="data-health">
+          <Card className="p-6">
+            <div className="space-y-1 mb-6">
+              <h2 className="text-lg font-semibold">Data Health & Protection</h2>
+              <p className="text-sm text-muted-foreground">
+                Monitor data integrity, storage usage, and protection status.
+              </p>
+            </div>
+            <DataHealthDashboard />
           </Card>
         </TabsContent>
 

@@ -28,6 +28,7 @@ import {
   statusLabel,
   renewalTypeLabel,
   formatDate,
+  formatDateTime,
   formatCurrency,
 } from "@/lib/formatters";
 // lifecycleLabel kept for collapsible Details section
@@ -423,6 +424,22 @@ export function AccountDetail() {
           />
         </CollapsibleSection>
       )}
+
+      {/* --------- System Information --------- */}
+      <CollapsibleSection title="System Information" defaultOpen={false}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
+          <Field
+            label="Created By"
+            value={account.creator?.full_name ?? "\u2014"}
+          />
+          <Field
+            label="Last Modified By"
+            value={account.updater?.full_name ?? "\u2014"}
+          />
+          <Field label="Created" value={formatDateTime(account.created_at)} />
+          <Field label="Last Modified" value={formatDateTime(account.updated_at)} />
+        </div>
+      </CollapsibleSection>
 
       {/* --------- Tabs --------- */}
       <Tabs defaultValue="contacts" className="mt-2">
